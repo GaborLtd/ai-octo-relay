@@ -128,13 +128,14 @@ channel
 目前支援在新 session 建立時於訊息開頭指定 agent，例如：
 
 ```text
-@bot #claude 幫我看這個問題
-@bot #sonnet 幫我寫測試
+@bot claude: 幫我看這個問題
+@bot sonnet: 幫我寫測試
 ```
 
 規則：
 
-- 第一個 token 必須是 `#agent` 或 `#alias`
+- 第一個 token 主推 `agent:` 或 `alias:`
+- 相容保留 `#agent` 或 `#alias`
 - `selector` 會對應 agent 名稱或 `agents.<name>.aliases`
 - 只在新 thread / 新 DM session 建立時生效
 - 不會改掉 `projects[].default_agent`
@@ -319,15 +320,16 @@ Slack 只支援有限的 markdown / mrkdwn。
 
 ## 11. Store 選型
 
-目前 state store 仍採：
+目前 store 分成兩種：
 
-- JSON 檔
+- `StateStore`: 結構化資料，例如 channel/thread scope、thread active flag、native session id
+- `EventStore`: append-only event/log，例如 session lifecycle、之後可能加入 usage / summary pipeline
 
 原因：
 
-- 目前保存的資料量仍小
-- 主要只包含 channel/thread scope、thread active flag、native session id
-- 實作與部署成本最低
+- 結構化 state 目前保存的資料量仍小
+- append-only 資料不應再硬塞回同一個結構化 state 檔
+- 先用 JSON / JSONL 仍是實作與部署成本最低
 
 但這不是長期綁死的決策。
 
@@ -341,15 +343,15 @@ Slack 只支援有限的 markdown / mrkdwn。
 建議方向：
 
 - 保持 store abstraction 清楚
-- 之後可新增 `sqlite_store.go`
-- JSON 作為 MVP / fallback，SQLite 作為擴充型 store
+- `StateStore` 與 `EventStore` 分開演進
+- JSON / JSONL 作為 MVP / fallback，SQLite 作為擴充型 store
 
 ## 12. 已知限制
 
 ### 1. native session id 會跨 process restart 保留，但活體 process 不會
 
 bot 重啟後，不會有背景 persistent process 恢復。
-但同一個 `thread + project + agent` 已記錄的 CLI native session id 仍會保存在 JSON store。
+但同一個 `thread + project + agent` 已記錄的 CLI native session id 仍會保存在 state store。
 
 ### 2. PTY persistent 目前不建議當主流程
 

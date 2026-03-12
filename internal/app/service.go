@@ -21,7 +21,8 @@ type Service struct {
 	cfg      *config.Config
 	projects *project.Registry
 	agents   *agent.Registry
-	store    *store.JSONStore
+	store    store.StateStore
+	events   store.EventStore
 }
 
 type Scope struct {
@@ -33,12 +34,13 @@ type Scope struct {
 	Quiet       bool
 }
 
-func NewService(cfg *config.Config, projects *project.Registry, agents *agent.Registry, stateStore *store.JSONStore) *Service {
+func NewService(cfg *config.Config, projects *project.Registry, agents *agent.Registry, stateStore store.StateStore, eventStore store.EventStore) *Service {
 	return &Service{
 		cfg:      cfg,
 		projects: projects,
 		agents:   agents,
 		store:    stateStore,
+		events:   eventStore,
 	}
 }
 
@@ -67,7 +69,7 @@ func (s *Service) HelpText() string {
 		"",
 		"非指令訊息會送到目前選擇的 project + agent 執行。",
 		"同一個 thread 會優先沿用各 CLI 自己的 session/resume 能力。",
-		"也可在訊息開頭用 #agent 指定，例如：#gemini 幫我看這個錯誤。",
+		"也可在訊息開頭指定 agent，例如：gemini: 幫我看這個錯誤。",
 	}, "\n")
 }
 
@@ -192,7 +194,7 @@ func (s *Service) ExtractAgentOverride(text string) (string, string, bool) {
 		return "", "", false
 	}
 	selector := fields[0]
-	if !strings.HasPrefix(selector, "#") {
+	if !isAgentSelectorToken(selector) {
 		return "", text, false
 	}
 	agentName, ok := s.agents.ResolveName(selector)
@@ -200,6 +202,13 @@ func (s *Service) ExtractAgentOverride(text string) (string, string, bool) {
 		return "", text, false
 	}
 	return agentName, strings.TrimSpace(strings.Join(fields[1:], " ")), true
+}
+
+func isAgentSelectorToken(token string) bool {
+	if strings.HasPrefix(token, "#") {
+		return true
+	}
+	return strings.HasSuffix(token, ":")
 }
 
 func (s *Service) StatusText(channelID, threadTS string) (string, error) {
@@ -631,6 +640,9 @@ func (s *Service) RunPrompt(ctx context.Context, channelID, threadTS, slackUserI
 		if clearErr := s.store.ClearSession(scope.SessionKey); clearErr != nil {
 			return result.Output, clearErr
 		}
+		s.appendEvent(scope, channelID, "session.native_cleared_for_retry", map[string]any{
+			"previous_native_session_id": nativeSessionID,
+		})
 		req.NativeSessionID = ""
 		result, err = s.agents.Run(ctx, req, onChunk)
 	}
@@ -645,6 +657,10 @@ func (s *Service) RunPrompt(ctx context.Context, channelID, threadTS, slackUserI
 		}); saveErr != nil {
 			return "", saveErr
 		}
+		s.appendEvent(scope, channelID, "session.native_saved", map[string]any{
+			"native_session_id":          result.NativeSessionID,
+			"previous_native_session_id": nativeSession.NativeID,
+		})
 	}
 	return result.Output, err
 }
@@ -712,6 +728,7 @@ func (s *Service) RestartSession(ctx context.Context, channelID, threadTS, slack
 		if err := s.store.ClearSession(scope.SessionKey); err != nil {
 			return "", err
 		}
+		s.appendEvent(scope, channelID, "session.native_cleared", nil)
 		return fmt.Sprintf("native session cleared\nkey: %s\nagent: %s", scope.SessionKey, scope.AgentName), nil
 	}
 	projectCfg, ok := s.projects.Get(scope.ProjectName)
@@ -736,6 +753,9 @@ func (s *Service) RestartSession(ctx context.Context, channelID, threadTS, slack
 	if err != nil {
 		return "", err
 	}
+	s.appendEvent(scope, channelID, "session.restarted", map[string]any{
+		"interactive": true,
+	})
 	return fmt.Sprintf("session restarted\nkey: %s\nagent: %s", info.Key, info.AgentName), nil
 }
 
@@ -747,6 +767,7 @@ func (s *Service) CloseSession(channelID, threadTS string) (string, error) {
 	if err := s.store.ClearSession(scope.SessionKey); err != nil {
 		return "", err
 	}
+	s.appendEvent(scope, channelID, "session.closed", nil)
 	if s.agents.Mode(scope.AgentName) != agent.ModePersistent {
 		return "session closed", nil
 	}
@@ -754,6 +775,22 @@ func (s *Service) CloseSession(channelID, threadTS string) (string, error) {
 		return "", err
 	}
 	return "session closed", nil
+}
+
+func (s *Service) appendEvent(scope Scope, channelID, eventType string, payload map[string]any) {
+	if s.events == nil {
+		return
+	}
+	_ = s.events.Append(store.Event{
+		Type:       eventType,
+		Timestamp:  time.Now().Format(time.RFC3339),
+		ChannelID:  channelID,
+		ThreadKey:  scope.ThreadKey,
+		SessionKey: scope.SessionKey,
+		Project:    scope.ProjectName,
+		Agent:      scope.AgentName,
+		Payload:    payload,
+	})
 }
 
 func newSessionUUID() (string, error) {

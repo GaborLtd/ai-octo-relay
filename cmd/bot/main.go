@@ -27,9 +27,15 @@ func main() {
 	logger := logx.New(cfg.LogLevel)
 	logger.Infof("starting ai-octo-relay with config=%s log_level=%s", *configPath, cfg.LogLevel)
 
-	stateStore, err := store.NewJSONStore(cfg.StorePath)
+	stateStore, err := store.OpenStateStore(cfg.StateStore)
 	if err != nil {
-		logger.Errorf("create store: %v", err)
+		logger.Errorf("create state store: %v", err)
+		os.Exit(1)
+	}
+
+	eventStore, err := store.OpenEventStore(cfg.EventStore)
+	if err != nil {
+		logger.Errorf("create event store: %v", err)
 		os.Exit(1)
 	}
 
@@ -49,7 +55,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	service := app.NewService(cfg, registry, runners, stateStore)
+	service := app.NewService(cfg, registry, runners, stateStore, eventStore)
 	bot, err := slackbot.New(cfg, service, logger)
 	if err != nil {
 		logger.Errorf("create slack bot: %v", err)

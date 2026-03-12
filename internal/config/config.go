@@ -13,6 +13,8 @@ type Config struct {
 	CommandPrefix    string                 `json:"command_prefix"`
 	DefaultAgent     string                 `json:"default_agent"`
 	StorePath        string                 `json:"store_path"`
+	StateStore       StorageConfig          `json:"state_store"`
+	EventStore       StorageConfig          `json:"event_store"`
 	LogLevel         string                 `json:"log_level"`
 	QuietByDefault   bool                   `json:"quiet_by_default"`
 	DMReadOnly       bool                   `json:"dm_read_only"`
@@ -20,6 +22,11 @@ type Config struct {
 	Slack            SlackConfig            `json:"slack"`
 	Projects         []ProjectConfig        `json:"projects"`
 	Agents           map[string]AgentConfig `json:"agents"`
+}
+
+type StorageConfig struct {
+	Type string `json:"type"`
+	Path string `json:"path"`
 }
 
 type SlackConfig struct {
@@ -95,6 +102,21 @@ func applyDefaults(cfg *Config) {
 	if cfg.StorePath == "" {
 		cfg.StorePath = "data/state.json"
 	}
+	if cfg.StateStore.Type == "" {
+		cfg.StateStore.Type = "json"
+	}
+	if cfg.StateStore.Path == "" {
+		cfg.StateStore.Path = cfg.StorePath
+	}
+	if cfg.EventStore.Type == "" {
+		cfg.EventStore.Type = "none"
+	}
+	if cfg.EventStore.Type == "jsonl" && cfg.EventStore.Path == "" {
+		cfg.EventStore.Path = "data/events.jsonl"
+	}
+	if cfg.EventStore.Type == "sqlite" && cfg.EventStore.Path == "" {
+		cfg.EventStore.Path = "data/events.db"
+	}
 	if cfg.LogLevel == "" {
 		cfg.LogLevel = "info"
 	}
@@ -152,6 +174,12 @@ func normalizePaths(cfg *Config, baseDir string) error {
 	if !filepath.IsAbs(cfg.StorePath) {
 		cfg.StorePath = filepath.Clean(filepath.Join(baseDir, cfg.StorePath))
 	}
+	if cfg.StateStore.Path != "" && !filepath.IsAbs(cfg.StateStore.Path) {
+		cfg.StateStore.Path = filepath.Clean(filepath.Join(baseDir, cfg.StateStore.Path))
+	}
+	if cfg.EventStore.Path != "" && !filepath.IsAbs(cfg.EventStore.Path) {
+		cfg.EventStore.Path = filepath.Clean(filepath.Join(baseDir, cfg.EventStore.Path))
+	}
 	for i := range cfg.Projects {
 		projectPath := os.ExpandEnv(cfg.Projects[i].Path)
 		if !filepath.IsAbs(projectPath) {
@@ -179,6 +207,22 @@ func (c *Config) Validate() error {
 	case "trace", "debug", "info", "warn", "error":
 	default:
 		return fmt.Errorf("log_level must be one of trace, debug, info, warn, error")
+	}
+	switch c.StateStore.Type {
+	case "json", "sqlite":
+	default:
+		return fmt.Errorf("state_store.type must be one of json, sqlite")
+	}
+	if strings.TrimSpace(c.StateStore.Path) == "" {
+		return errors.New("state_store.path is required")
+	}
+	switch c.EventStore.Type {
+	case "none", "jsonl", "sqlite":
+	default:
+		return fmt.Errorf("event_store.type must be one of none, jsonl, sqlite")
+	}
+	if c.EventStore.Type != "none" && strings.TrimSpace(c.EventStore.Path) == "" {
+		return errors.New("event_store.path is required unless event_store.type is none")
 	}
 	if c.DefaultAgent != "" {
 		if _, ok := c.Agents[c.DefaultAgent]; !ok {

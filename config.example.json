@@ -2,6 +2,14 @@
   "command_prefix": "!",
   "default_agent": "codex",
   "store_path": "data/state.json",
+  "state_store": {
+    "type": "json",
+    "path": "data/state.json"
+  },
+  "event_store": {
+    "type": "jsonl",
+    "path": "data/events.jsonl"
+  },
   "log_level": "info",
   "quiet_by_default": true,
   "dm_read_only": true,

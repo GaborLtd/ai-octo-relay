@@ -41,7 +41,7 @@
 - 不做多平台
 - native session id 會保存在本機 state store
 - 不再主推 PTY persistent/TUI 模式
-- 目前 store 採 JSON；若未來 session/history 資料量變大，可再切 SQLite
+- 結構化 state 預設用 JSON；append-only event 可用 JSONL，兩者都可切到 SQLite
 
 這樣可以先滿足「人在外面，用手機從 Slack 控制家裡電腦上的專案」。
 
@@ -84,9 +84,9 @@
 - 在 channel 中直接提問時，bot 會自動用那則根訊息建立 thread session
 - 同一個 thread 內的後續互動會沿用同一個 session
 - 同一個 `thread + project + agent` 會優先沿用該 CLI 的原生 session/resume 能力
-- 若訊息第一個 token 是 `#agent` 或 `#alias`，只會在新 thread / 新 DM session 建立時決定 agent
+- 若訊息第一個 token 是 `agent:` / `alias:`，或相容的 `#agent` / `#alias`，只會在新 thread / 新 DM session 建立時決定 agent
 - thread 或 DM session 一旦建立，就不能在同一 session 內切換 agent
-- `#agent` selector 只用來選 agent，不會當成 prompt 內容送進 CLI
+- agent selector 只用來選 agent，不會當成 prompt 內容送進 CLI
 
 ## Remote Commands
 
@@ -245,7 +245,11 @@ slack-manifest.yaml
 
 - `command_prefix`: Slack 指令前綴
 - `default_agent`: 全域預設 agent
-- `store_path`: 狀態檔路徑
+- `store_path`: 舊版 state store 路徑，相容保留
+- `state_store.type`: `json / sqlite`
+- `state_store.path`: 結構化 state store 路徑
+- `event_store.type`: `none / jsonl / sqlite`
+- `event_store.path`: append-only event store 路徑
 - `log_level`: `trace / debug / info / warn / error`
 - `quiet_by_default`: 是否預設安靜輸出
 - `slack.app_token`
@@ -358,25 +362,26 @@ placeholder：
 限制：
 
 - `agents` 的 key 與所有 `aliases` 經過正規化後不能重覆
-- 例如 `codex`、`#codex`、`@codex` 會視為同一個 selector
+- 例如 `codex`、`codex:`、`#codex`、`@codex` 會視為同一個 selector
 
 Slack 訊息可直接指定 agent，例如：
 
 ```text
-@bot #claude 幫我看這個 project 的 build error
-@bot #gemini 幫我總結這個檔案
-@bot #sonnet 幫我補測試
+@bot codex: 幫我看這個 project 的 build error
+@bot gemini: 幫我總結這個檔案
+@bot sonnet: 幫我補測試
 ```
 
 規則：
 
-- 只有 `#selector` 格式會觸發 agent override
+- 主推 `selector:` 格式，例如 `codex:`、`gemini:`、`claude:`
+- 相容保留 `#selector` 格式，例如 `#codex`
 - `selector` 可對應 agent 名稱或 `aliases`
 - 裸字 `claude` / `gemini` / `sonnet` 不會觸發 override
 - 只有新 thread / 新 DM session 建立時才會套用 selector
 - 同一 thread / DM session 不可改用別的 agent
 
-其中 `#sonnet` 是 `claude.aliases` 的例子。
+其中 `sonnet:` 是 `claude.aliases` 的例子。
 
 ### DM 模式
 

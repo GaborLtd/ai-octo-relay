@@ -24,6 +24,9 @@ type Bot struct {
 	client    *slack.Client
 	socket    *socketmode.Client
 	botUserID string
+
+	runMu          sync.Mutex
+	runningSession map[string]struct{}
 }
 
 func New(cfg *config.Config, service *app.Service, logger *logx.Logger) (*Bot, error) {
@@ -45,6 +48,7 @@ func New(cfg *config.Config, service *app.Service, logger *logx.Logger) (*Bot, e
 		client:    client,
 		socket:    socket,
 		botUserID: auth.UserID,
+		runningSession: map[string]struct{}{},
 	}, nil
 }
 
@@ -63,9 +67,11 @@ func (b *Bot) Run(ctx context.Context) error {
 			if !ok {
 				return nil
 			}
-			if err := b.handleEvent(ctx, evt); err != nil {
-				b.logger.Errorf("handle slack event: %v", err)
-			}
+			go func(evt socketmode.Event) {
+				if err := b.handleEvent(ctx, evt); err != nil {
+					b.logger.Errorf("handle slack event: %v", err)
+				}
+			}(evt)
 		}
 	}
 }
@@ -176,6 +182,12 @@ func (b *Bot) processMessage(ctx context.Context, channelID, userID, rawText, th
 	if err := b.service.ValidateAgentLock(channelID, normalizedThreadTS, agentOverride); err != nil {
 		return b.reply(channelID, normalizedThreadTS, err.Error())
 	}
+	if hasAgentOverride {
+		if _, err := b.service.UseAgent(channelID, normalizedThreadTS, agentOverride); err != nil {
+			return fmt.Errorf("persist agent override: %w", err)
+		}
+		b.logger.Infof("agent override persisted: channel=%s user=%s thread_ts=%s agent=%s", channelID, userID, normalizedThreadTS, agentOverride)
+	}
 	if err := b.service.MarkThreadSessionActive(channelID, normalizedThreadTS); err != nil {
 		return fmt.Errorf("mark thread session active: %w", err)
 	}
@@ -229,6 +241,12 @@ func (b *Bot) processMessage(ctx context.Context, channelID, userID, rawText, th
 	}
 
 	b.logger.Infof("agent run started: channel=%s user=%s agent=%s project=%s status_ts=%s", channelID, userID, scope.AgentName, scope.ProjectName, statusTS)
+	if !b.tryBeginSessionRun(scope.SessionKey) {
+		b.logger.Warnf("session already running: channel=%s user=%s session_key=%s", channelID, userID, scope.SessionKey)
+		return b.publishFinalResponse(channelID, normalizedThreadTS, statusTS, "這個 thread 目前還在處理上一個請求，請稍候再試，或開新的 thread。")
+	}
+	defer b.endSessionRun(scope.SessionKey)
+
 	output, runErr := b.service.RunPrompt(ctx, channelID, normalizedThreadTS, userID, text, agentOverride, isDM, onChunk)
 	if runErr != nil {
 		b.logger.Warnf("agent run failed: channel=%s user=%s status_ts=%s error=%v", channelID, userID, statusTS, runErr)
@@ -255,6 +273,22 @@ func (b *Bot) processMessage(ctx context.Context, channelID, userID, rawText, th
 	}
 	b.logger.Infof("final status update completed: channel=%s status_ts=%s final_len=%d", channelID, statusTS, len(finalText))
 	return nil
+}
+
+func (b *Bot) tryBeginSessionRun(sessionKey string) bool {
+	b.runMu.Lock()
+	defer b.runMu.Unlock()
+	if _, exists := b.runningSession[sessionKey]; exists {
+		return false
+	}
+	b.runningSession[sessionKey] = struct{}{}
+	return true
+}
+
+func (b *Bot) endSessionRun(sessionKey string) {
+	b.runMu.Lock()
+	defer b.runMu.Unlock()
+	delete(b.runningSession, sessionKey)
 }
 
 func (b *Bot) handleCommand(ctx context.Context, channelID, userID, threadTS, text string, isDM bool) (string, error) {

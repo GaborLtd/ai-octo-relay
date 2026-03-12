@@ -76,6 +76,16 @@
 - 目前仍使用 JSON store
 - 若未來 session/history 資料量變大，優先考慮切 SQLite
 
+## 2026-03-12
+
+### storage abstraction 拆分
+
+- 新增 `StateStore` / `EventStore` 分離
+- 結構化 state 預設維持 JSON backend
+- append-only event 新增 `jsonl` backend
+- 透過 `sqlite3` CLI 新增 SQLite backend，避免先引入額外 Go driver
+- `store_path` 保留相容；新設定改用 `state_store` / `event_store`
+
 ### Remote command 白名單
 
 - 新增 `projects[].commands`

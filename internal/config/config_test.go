@@ -77,6 +77,13 @@ func TestValidateRejectsDuplicateProjectCommandName(t *testing.T) {
 func validConfig() Config {
 	return Config{
 		LogLevel: "info",
+		StateStore: StorageConfig{
+			Type: "json",
+			Path: "/tmp/state.json",
+		},
+		EventStore: StorageConfig{
+			Type: "none",
+		},
 		Slack: SlackConfig{
 			AppToken: "app-token",
 			BotToken: "bot-token",

@@ -8,33 +8,13 @@ import (
 	"sync"
 )
 
-type ScopeState struct {
-	Project       string `json:"project"`
-	Agent         string `json:"agent"`
-	Quiet         *bool  `json:"quiet,omitempty"`
-	SessionActive bool   `json:"session_active,omitempty"`
-}
-
-type NativeSessionState struct {
-	Agent     string `json:"agent"`
-	NativeID  string `json:"native_id"`
-	UpdatedAt string `json:"updated_at,omitempty"`
-	Project   string `json:"project,omitempty"`
-	ThreadKey string `json:"thread_key,omitempty"`
-	ChannelID string `json:"channel_id,omitempty"`
-}
-
-type State struct {
-	Channels map[string]ScopeState         `json:"channels"`
-	Threads  map[string]ScopeState         `json:"threads"`
-	Sessions map[string]NativeSessionState `json:"sessions"`
-}
-
 type JSONStore struct {
 	path  string
 	mu    sync.RWMutex
 	state State
 }
+
+var _ StateStore = (*JSONStore)(nil)
 
 func NewJSONStore(path string) (*JSONStore, error) {
 	store := &JSONStore{
