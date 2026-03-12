@@ -28,6 +28,7 @@
 - Slack channel 固定綁定 project
 - 使用者在 channel 根訊息提問時，bot 會自動在該訊息底下 thread 回覆
 - 後續在同一個 thread 內的追問，會沿用同一個 session
+- 不同 thread 與 command 不應被單一長時間 agent run 阻塞
 - thread 建立時可決定 agent，建立後會鎖定
 - 單一訊息可在新 session 建立時於開頭指定 agent name / alias
 - thread 也可暫時覆寫 project，但這是例外，不是日常主流程
@@ -164,6 +165,36 @@ channel
 
 - 不同問題共用上下文
 - 不同 agent 的上下文混在一起
+
+### 同一 session 的並行限制
+
+雖然不同 Slack event 現在可以並行處理，但同一個 `session key` 目前仍必須序列化：
+
+- 同一個 thread / DM session 同一時間只允許一個 agent prompt 在跑
+- 如果上一個 request 還沒完成，新的 request 會被直接拒絕並提示稍後再試
+
+原因：
+
+- `codex exec resume`
+- `gemini --resume`
+- `claude --session-id`
+
+這些 native resume/session 機制都假設同一個 session 由單一路徑接續。
+若同時把兩個 prompt 打到同一個 native session，很容易把上下文、回覆順序、或 session state 搞亂。
+
+### 不同 session 的並行處理
+
+bot 的 Slack event loop 現在不應再被單一長時間 agent run 卡住。
+
+也就是說：
+
+- `!help`
+- 另一個 thread 的新問題
+- 不同 DM / 不同 channel 的請求
+
+都應能在另一個長時間 `codex` / `claude` / `gemini` 任務執行時繼續處理。
+
+這是刻意設計，因為 Slack bot 作為入口不應被單一慢任務變成全域串行。
 
 ## 6. Slack 回覆策略
 
@@ -345,6 +376,23 @@ Slack 只支援有限的 markdown / mrkdwn。
 - 保持 store abstraction 清楚
 - `StateStore` 與 `EventStore` 分開演進
 - JSON / JSONL 作為 MVP / fallback，SQLite 作為擴充型 store
+
+### 目前實作
+
+- `StateStore`
+  - `json`
+  - `sqlite`
+- `EventStore`
+  - `none`
+  - `jsonl`
+  - `sqlite`
+
+目前預設配置仍建議：
+
+- `state_store.type = json`
+- `event_store.type = jsonl`
+
+這樣部署最簡單，也足夠應付目前的 session / event 規模。
 
 ## 12. 已知限制
 

@@ -19,6 +19,8 @@
 - channel 的 project 來自 `projects[].channel_ids`
 - channel 根訊息第一次提問時，bot 會回到該訊息的 thread
 - 同一個 thread 內的後續訊息，即使沒有再 mention bot，也應該被視為同一個 session 延續
+- 不同 thread / 不同 command 不應被單一 agent CLI 長時間執行整體卡住
+- 同一個 session 同一時間只允許一個 prompt 執行，避免 native resume/session-id 互撞
 - thread 可以覆寫 agent
 - thread 可以暫時覆寫 project，但這是例外用法
 
@@ -26,6 +28,7 @@
 
 - 一個 channel 共用單一 session
 - 所有後續 thread 訊息都必須重新 mention bot
+- 整個 bot 因為一個慢請求退化成全域串行
 
 ## 2. Project 規則
 

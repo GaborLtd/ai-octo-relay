@@ -12,6 +12,22 @@
 
 ## 2026-03-12
 
+### Slack event 改為非同步處理
+
+- 修正單一 agent CLI 長時間執行時，整個 bot event loop 被同步卡住的問題
+- `!help`、其他 command、以及不同 thread 的請求不再需要等前一個 agent run 結束
+
+### 同一 session 加入單飛保護
+
+- 同一個 `thread + project + agent` session 同一時間只允許一個 prompt 執行
+- 若上一個 request 尚未完成，新的同 session request 會直接提示稍後再試
+- 避免 CLI native `resume` / `session-id` 被並發請求互相污染
+
+### 文件同步更新
+
+- README、architecture notes、AGENTS 補上 session 並行規則與 store 配置現況
+- 明文化「不同 session 可並行、同 session 需序列化」的設計原則
+
 ### 初版 MVP 建立
 
 - 建立 Go 版 Slack bot 骨架

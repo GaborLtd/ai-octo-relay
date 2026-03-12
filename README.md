@@ -10,6 +10,8 @@
 - `thread = 單一問題 / 單一 session`
 - `projects[].channel_ids` 決定 channel 對應的 project
 - 在 thread 中後續追問，不需要再 mention bot
+- 不同 thread / 指令不應被單一 agent CLI 長時間執行整體卡住
+- 同一個 session 同一時間只允許一個 agent request 執行，避免 native resume/session-id 互撞
 - 所有 agent 預設使用 `oneshot`
 - 同一個 thread 會優先沿用 CLI 原生 `resume/session-id` 記憶
 - Slack 回覆會做清理與自動分段發送
@@ -31,7 +33,8 @@
 - 可在訊息開頭指定 agent，例如 `@bot #claude 幫我看這段 code`
 - 透過本機 CLI 執行 `codex` / `claude` / `gemini`
 - 同一個 thread 可透過 CLI 原生 session/resume 延續上下文
-- 使用 JSON 檔持久化狀態
+- Slack event 改為非同步處理，避免一個長時間任務把整個 bot 卡住
+- 使用可切換的 state/event store 持久化狀態
 
 ## MVP 範圍
 
@@ -84,6 +87,8 @@
 - 在 channel 中直接提問時，bot 會自動用那則根訊息建立 thread session
 - 同一個 thread 內的後續互動會沿用同一個 session
 - 同一個 `thread + project + agent` 會優先沿用該 CLI 的原生 session/resume 能力
+- 不同 thread、DM、以及 `!help` 這類 command 不應被別的長時間 agent 執行阻塞
+- 同一個 session 若上一個請求尚未完成，新的 prompt 會被拒絕，避免同時打到同一個 native session
 - 若訊息第一個 token 是 `agent:` / `alias:`，或相容的 `#agent` / `#alias`，只會在新 thread / 新 DM session 建立時決定 agent
 - thread 或 DM session 一旦建立，就不能在同一 session 內切換 agent
 - agent selector 只用來選 agent，不會當成 prompt 內容送進 CLI
