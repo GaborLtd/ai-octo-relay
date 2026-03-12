@@ -137,7 +137,6 @@ slack-manifest.yaml
 - `quiet_by_default`: 是否預設安靜輸出
 - `slack.app_token`
 - `slack.bot_token`
-- `slack.allowed_channels`
 - `projects`
 - `agents`
 
@@ -162,6 +161,21 @@ slack-manifest.yaml
 ```
 
 這樣你在 `C1234567890` 那個 channel 問問題時，就會直接使用 `backend-api`。
+
+### `slack.allowed_channels` 是否需要
+
+一般情況下，不需要。
+
+因為現在主要模型已經是：
+
+- `projects[].channel_ids` 決定每個 channel 對應哪個 project
+
+`slack.allowed_channels` 比較像額外的全域白名單，只有在你想做第二層限制時才需要。
+
+所以建議：
+
+- 日常使用：只用 `projects[].channel_ids`
+- 需要額外限制：再另外加 `slack.allowed_channels`
 
 ### agents
 
@@ -200,7 +214,7 @@ placeholder：
 1. 填入 Slack token，或改用環境變數
 2. projects 加上你真正想遠端操作的 repo，並用 `channel_ids` 綁到對應 channel
 3. 確認 `codex / claude / gemini` 這些 binary 在 `PATH` 裡
-4. 如果只想讓特定 Slack channel 用，填 `slack.allowed_channels`
+4. 如果你還想再加一層全域白名單，才另外使用 `slack.allowed_channels`
 
 例如：
 
@@ -210,19 +224,18 @@ placeholder：
   "quiet_by_default": true,
   "slack": {
     "app_token": "",
-    "bot_token": "",
-    "allowed_channels": ["C1234567890", "C2345678901"]
+    "bot_token": ""
   },
   "projects": [
     {
       "name": "relay",
-      "path": "/Users/match/git/ai-octo-relay",
+      "path": "/path/to/relay",
       "default_agent": "codex",
       "channel_ids": ["C1234567890"]
     },
     {
       "name": "my-app",
-      "path": "/Users/match/git/my-app",
+      "path": "/path/to/my-app",
       "default_agent": "claude",
       "channel_ids": ["C2345678901"]
     }

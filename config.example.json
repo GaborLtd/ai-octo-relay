@@ -6,21 +6,14 @@
   "quiet_by_default": true,
   "slack": {
     "app_token": "",
-    "bot_token": "",
-    "allowed_channels": []
+    "bot_token": ""
   },
   "projects": [
     {
-      "name": "backend-api",
-      "path": "/Users/yourname/git/backend-api",
-      "default_agent": "claude",
-      "channel_ids": ["C1234567890"]
-    },
-    {
-      "name": "frontend-web",
-      "path": "/Users/yourname/git/frontend-web",
-      "default_agent": "gemini",
-      "channel_ids": ["C2345678901"]
+      "name": "your-project",
+      "path": "/path/to/your-project",
+      "default_agent": "codex",
+      "channel_ids": []
     }
   ],
   "agents": {
