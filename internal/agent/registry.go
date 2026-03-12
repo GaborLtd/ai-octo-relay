@@ -287,6 +287,9 @@ func (a codexAdapter) Build(req RunRequest, cfg config.AgentConfig) ExecSpec {
 	if req.NativeSessionID != "" && len(cfg.Args) == 0 {
 		oneshotArgs = []string{"exec", "resume", "{{native_session_id}}", "--skip-git-repo-check", "--json", "--output-last-message", "{{last_message_path}}", "-"}
 	}
+	if strings.TrimSpace(cfg.Model) != "" {
+		oneshotArgs = prependMissingOptions(oneshotArgs, "--model", cfg.Model)
+	}
 	spec := finalizeSpec(
 		req,
 		cfg,
@@ -304,6 +307,9 @@ func (a geminiAdapter) Build(req RunRequest, cfg config.AgentConfig) ExecSpec {
 	if req.NativeSessionID != "" && len(cfg.Args) == 0 {
 		oneshotArgs = []string{"--resume", "{{native_session_id}}", "--output-format", "json", "-p", "{{prompt}}"}
 	}
+	if strings.TrimSpace(cfg.Model) != "" && !hasOptionWithValue(oneshotArgs, "-m", cfg.Model) {
+		oneshotArgs = append([]string{"-m", cfg.Model}, oneshotArgs...)
+	}
 	spec := finalizeSpec(
 		req,
 		cfg,
@@ -318,6 +324,9 @@ func (a geminiAdapter) Build(req RunRequest, cfg config.AgentConfig) ExecSpec {
 func (a claudeAdapter) Build(req RunRequest, cfg config.AgentConfig) ExecSpec {
 	command := firstNonEmpty(cfg.Command, "claude")
 	oneshotArgs := defaultArgs(cfg.Args, "-p", "--output-format", "text", "--session-id", "{{native_session_id}}", "{{prompt}}")
+	if strings.TrimSpace(cfg.Model) != "" {
+		oneshotArgs = prependMissingOptions(oneshotArgs, "--model", cfg.Model)
+	}
 	spec := finalizeSpec(
 		req,
 		cfg,

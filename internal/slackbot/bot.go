@@ -401,6 +401,11 @@ func (b *Bot) handleAgentCommand(channelID, threadTS string, args []string) (str
 	switch args[0] {
 	case "list":
 		return b.service.AgentListText(), nil
+	case "model":
+		if len(args) < 3 || args[1] != "list" {
+			return "", fmt.Errorf("usage: !agent model list <name>")
+		}
+		return b.service.AgentModelListText(args[2])
 	case "use":
 		if len(args) < 2 {
 			return "", fmt.Errorf("missing agent name")
@@ -496,6 +501,8 @@ var noiseLinePatterns = []*regexp.Regexp{
 	regexp.MustCompile(`^succeeded in [0-9]+ms:?$`),
 	regexp.MustCompile(`^failed in [0-9]+ms:?$`),
 }
+
+var markdownLinkPattern = regexp.MustCompile(`\[(.+?)\]\((.+?)\)`)
 
 func cleanFinalResponse(text string) string {
 	lines := strings.Split(strings.ReplaceAll(text, "\r", ""), "\n")
@@ -627,7 +634,7 @@ func formatSlackReply(text string) string {
 			continue
 		}
 
-		out = append(out, trimmedRight)
+		out = append(out, normalizeSlackMarkdownLine(trimmedRight))
 		lastBlank = false
 	}
 
@@ -636,6 +643,24 @@ func formatSlackReply(text string) string {
 		formatted += "\n```"
 	}
 	return formatted
+}
+
+func normalizeSlackMarkdownLine(line string) string {
+	return markdownLinkPattern.ReplaceAllStringFunc(line, func(match string) string {
+		parts := markdownLinkPattern.FindStringSubmatch(match)
+		if len(parts) != 3 {
+			return match
+		}
+		label := strings.TrimSpace(parts[1])
+		target := strings.TrimSpace(parts[2])
+		if label == "" {
+			return match
+		}
+		if strings.HasPrefix(target, "http://") || strings.HasPrefix(target, "https://") {
+			return "<" + target + "|" + label + ">"
+		}
+		return "`" + label + "`"
+	})
 }
 
 func (b *Bot) publishFinalResponse(channelID, threadTS, statusTS, text string) error {

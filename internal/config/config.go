@@ -53,6 +53,7 @@ type ProjectCommandConfig struct {
 type AgentConfig struct {
 	Adapter             string            `json:"adapter"`
 	Aliases             []string          `json:"aliases"`
+	Model               string            `json:"model"`
 	Command             string            `json:"command"`
 	Args                []string          `json:"args"`
 	InteractiveCommand  string            `json:"interactive_command"`

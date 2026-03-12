@@ -54,6 +54,7 @@ func (s *Service) HelpText() string {
 		s.cfg.CommandPrefix + "project use <name>  (thread override only)",
 		s.cfg.CommandPrefix + "project clear      (thread override only)",
 		s.cfg.CommandPrefix + "agent list",
+		s.cfg.CommandPrefix + "agent model list <name>",
 		s.cfg.CommandPrefix + "agent use <name>",
 		s.cfg.CommandPrefix + "agent clear",
 		s.cfg.CommandPrefix + "cmd list",
@@ -114,10 +115,12 @@ func (s *Service) ValidateAgentLock(channelID, threadTS, agentOverride string) e
 func (s *Service) resolveScope(channelID, threadTS, agentOverride string) (Scope, error) {
 	channelState := s.store.GetChannel(channelID)
 	scope := Scope{
-		ProjectName: channelState.Project,
-		AgentName:   channelState.Agent,
 		IsThread:    threadTS != "",
 		Quiet:       s.cfg.QuietByDefault,
+	}
+	if threadTS == "" {
+		scope.ProjectName = channelState.Project
+		scope.AgentName = channelState.Agent
 	}
 	if channelState.Quiet != nil {
 		scope.Quiet = *channelState.Quiet
@@ -316,7 +319,54 @@ func (s *Service) RunGitCommand(ctx context.Context, channelID, threadTS string,
 	if err != nil {
 		return "", err
 	}
-	return s.runCommand(ctx, projectCfg.Path, "git", cmdArgs...)
+	output, runErr := s.runCommand(ctx, projectCfg.Path, "git", cmdArgs...)
+	if len(args) > 0 && args[0] == "branch" {
+		output = formatGitBranchOutput(output)
+	}
+	return output, runErr
+}
+
+func formatGitBranchOutput(text string) string {
+	lines := strings.Split(strings.TrimSpace(text), "\n")
+	if len(lines) == 0 {
+		return text
+	}
+	out := make([]string, 0, len(lines))
+	for _, raw := range lines {
+		line := strings.TrimSpace(raw)
+		if line == "" {
+			continue
+		}
+		current := strings.HasPrefix(line, "* ")
+		line = strings.TrimSpace(strings.TrimPrefix(line, "*"))
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+
+		name := fields[0]
+		rest := strings.TrimSpace(strings.TrimPrefix(line, name))
+		prefix := "-"
+		if current {
+			prefix = "*"
+		}
+		if strings.HasPrefix(name, "remotes/") {
+			name = strings.TrimPrefix(name, "remotes/")
+		}
+		out = append(out, fmt.Sprintf("%s `%s`%s", prefix, name, formatBranchSuffix(rest)))
+	}
+	if len(out) == 0 {
+		return text
+	}
+	return strings.Join(out, "\n")
+}
+
+func formatBranchSuffix(rest string) string {
+	rest = strings.TrimSpace(rest)
+	if rest == "" {
+		return ""
+	}
+	return " " + rest
 }
 
 func (s *Service) ValidateDMCommandAccess(command string, args []string) error {
@@ -414,6 +464,53 @@ func (s *Service) AgentListText() string {
 		lines = append(lines, line)
 	}
 	return strings.Join(lines, "\n")
+}
+
+func (s *Service) AgentModelListText(name string) (string, error) {
+	canonicalName, ok := s.agents.ResolveName(name)
+	if !ok {
+		return "", fmt.Errorf("agent %q not found", name)
+	}
+
+	cfg, ok := s.cfg.Agents[canonicalName]
+	if !ok {
+		return "", fmt.Errorf("agent %q config not found", canonicalName)
+	}
+
+	currentModel := strings.TrimSpace(cfg.Model)
+	if currentModel == "" {
+		currentModel = "(not set)"
+	}
+
+	switch canonicalName {
+	case "codex":
+		return strings.Join([]string{
+			fmt.Sprintf("agent: %s", canonicalName),
+			fmt.Sprintf("configured_model: %s", currentModel),
+			"CLI status: codex 目前沒有穩定的 `list models` 子命令可直接列出你帳號可用 model。",
+			"請改看 OpenAI models 文件，或直接在 config 設 `agents.codex.model`。",
+		}, "\n"), nil
+	case "claude":
+		return strings.Join([]string{
+			fmt.Sprintf("agent: %s", canonicalName),
+			fmt.Sprintf("configured_model: %s", currentModel),
+			"CLI status: claude 目前沒有穩定的 `list models` 子命令可直接列出你帳號可用 model。",
+			"可用 model 仍以 Anthropic 帳號權限與官方 models 文件為準。",
+		}, "\n"), nil
+	case "gemini":
+		return strings.Join([]string{
+			fmt.Sprintf("agent: %s", canonicalName),
+			fmt.Sprintf("configured_model: %s", currentModel),
+			"CLI status: gemini 目前沒有穩定的 `list models` 子命令可直接列出你帳號可用 model。",
+			"建議直接指定 `gemini-2.5-flash`；實際可用性仍受帳號權限與 server capacity 影響。",
+		}, "\n"), nil
+	default:
+		return strings.Join([]string{
+			fmt.Sprintf("agent: %s", canonicalName),
+			fmt.Sprintf("configured_model: %s", currentModel),
+			"這個 agent 目前沒有內建 model list 探測邏輯。",
+		}, "\n"), nil
+	}
 }
 
 func (s *Service) QuietStatusText(channelID, threadTS string) (string, error) {
@@ -662,6 +759,9 @@ func (s *Service) RunPrompt(ctx context.Context, channelID, threadTS, slackUserI
 			"previous_native_session_id": nativeSession.NativeID,
 		})
 	}
+	if friendly := summarizeAgentFailure(scope.AgentName, result.Output, err); friendly != "" {
+		return friendly, nil
+	}
 	return result.Output, err
 }
 
@@ -681,6 +781,35 @@ func shouldRetryWithFreshNativeSession(agentName, nativeSessionID string, runErr
 	default:
 		return false
 	}
+}
+
+func summarizeAgentFailure(agentName, output string, runErr error) string {
+	if runErr == nil {
+		return ""
+	}
+
+	text := strings.ToLower(output)
+	if runErr != nil {
+		text += "\n" + strings.ToLower(runErr.Error())
+	}
+
+	switch agentName {
+	case "gemini":
+		if strings.Contains(text, "model_capacity_exhausted") ||
+			strings.Contains(text, "resource_exhausted") ||
+			strings.Contains(text, "no capacity available for model") ||
+			strings.Contains(text, "status 429") ||
+			strings.Contains(text, `"code": 429`) {
+			return "Gemini 目前不可用（429 / model capacity exhausted）。請稍後再試，或改用 `codex:` / `claude:`。"
+		}
+		if strings.Contains(text, "fatalturnlimitederror") ||
+			strings.Contains(text, "reached max session turns") ||
+			strings.Contains(text, `"code": 53`) {
+			return "Gemini session 已達最大 turns，系統已嘗試自動重置；若仍失敗，請執行 `!session restart`，或改開新 thread / 改用 `codex:`。"
+		}
+	}
+
+	return ""
 }
 
 func (s *Service) promptSuffixForContext(isDM bool) string {

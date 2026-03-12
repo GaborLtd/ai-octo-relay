@@ -60,6 +60,7 @@
 !project use <name>
 !project clear
 !agent list
+!agent model list <name>
 !agent use <name>
 !agent clear
 !cmd list
@@ -336,6 +337,7 @@ slack-manifest.yaml
 
 - `adapter`: `codex` / `gemini` / `claude` / `generic`
 - `aliases`: agent 別名，例如 `["c", "cc"]`
+- `model`: 要指定給 CLI 的模型名稱
 - `command`: CLI 指令名稱
 - `aliases`: 可在 Slack 訊息開頭使用的 agent 別名
 - `args`: 單次執行參數
@@ -387,6 +389,41 @@ Slack 訊息可直接指定 agent，例如：
 - 同一 thread / DM session 不可改用別的 agent
 
 其中 `sonnet:` 是 `claude.aliases` 的例子。
+
+如果想固定某個 agent 使用特定模型，可以直接在 config 寫：
+
+```json
+{
+  "agents": {
+    "codex": {
+      "adapter": "codex",
+      "model": "gpt-5.2-codex"
+    },
+    "claude": {
+      "adapter": "claude",
+      "model": "claude-sonnet-4-5"
+    },
+    "gemini": {
+      "adapter": "gemini",
+      "model": "gemini-2.5-flash"
+    }
+  }
+}
+```
+
+目前對應方式：
+
+- `codex`：加上 `--model`
+- `claude`：加上 `--model`
+- `gemini`：加上 `-m`
+
+也可以查目前 agent 的 model 設定與 CLI 支援狀態：
+
+```text
+!agent model list codex
+!agent model list claude
+!agent model list gemini
+```
 
 ### DM 模式
 

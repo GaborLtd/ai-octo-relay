@@ -20,3 +20,11 @@ func TestSessionRunGuard(t *testing.T) {
 		t.Fatalf("tryBeginSessionRun() after end = false, want true")
 	}
 }
+
+func TestNormalizeSlackMarkdownLine(t *testing.T) {
+	got := normalizeSlackMarkdownLine("變更在 [internal/config/config.go](/Users/match/git/ai-octo-relay/internal/config/config.go)")
+	want := "變更在 `internal/config/config.go`"
+	if got != want {
+		t.Fatalf("normalizeSlackMarkdownLine() = %q, want %q", got, want)
+	}
+}

@@ -43,6 +43,7 @@
     "codex": {
       "adapter": "codex",
       "aliases": ["o3", "openai"],
+      "model": "gpt-5.2-codex",
       "command": "codex",
       "mode": "oneshot",
       "transport": "stdio",
@@ -67,6 +68,7 @@
     "claude": {
       "adapter": "claude",
       "aliases": ["sonnet"],
+      "model": "claude-sonnet-4-5",
       "command": "claude",
       "mode": "oneshot",
       "transport": "stdio",
@@ -88,6 +90,7 @@
     "gemini": {
       "adapter": "gemini",
       "aliases": ["flash"],
+      "model": "gemini-2.5-flash",
       "command": "gemini",
       "mode": "oneshot",
       "transport": "stdio",
