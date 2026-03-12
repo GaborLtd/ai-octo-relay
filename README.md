@@ -2,7 +2,26 @@
 
 單一 Slack bot，多 project、多 AI CLI agent 的遠端控制 MVP。
 
-目前支援的核心能力：
+## 最新狀態
+
+目前專案的主模型已經確立：
+
+- `channel = project room`
+- `thread = 單一問題 / 單一 session`
+- `projects[].channel_ids` 決定 channel 對應的 project
+- 在 thread 中後續追問，不需要再 mention bot
+- `codex` 預設使用 `oneshot`
+- `claude` / `gemini` 可用 persistent session
+- Slack 回覆會做清理與自動分段發送
+
+先看文件：
+
+- 使用與設定：[README.md](/Users/match/git/ai-octo-relay/README.md)
+- 維護規則：[AGENTS.md](/Users/match/git/ai-octo-relay/AGENTS.md)
+- 架構背景：[architecture-notes.md](/Users/match/git/ai-octo-relay/docs/architecture-notes.md)
+- 變更歷程：[changelog.md](/Users/match/git/ai-octo-relay/docs/changelog.md)
+
+## 核心能力
 
 - 單一 Slack bot 接收訊息
 - 多個本機 project registry
@@ -123,6 +142,8 @@ slack-manifest.yaml
 如果之後要修改互動模型、thread 行為、project mapping、agent session 或 Slack formatting，先看：
 
 - [architecture-notes.md](/Users/match/git/ai-octo-relay/docs/architecture-notes.md)
+- [AGENTS.md](/Users/match/git/ai-octo-relay/AGENTS.md)
+- [changelog.md](/Users/match/git/ai-octo-relay/docs/changelog.md)
 
 ## Config 結構
 

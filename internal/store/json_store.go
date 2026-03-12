@@ -9,9 +9,10 @@ import (
 )
 
 type ScopeState struct {
-	Project string `json:"project"`
-	Agent   string `json:"agent"`
-	Quiet   *bool  `json:"quiet,omitempty"`
+	Project       string `json:"project"`
+	Agent         string `json:"agent"`
+	Quiet         *bool  `json:"quiet,omitempty"`
+	SessionActive bool   `json:"session_active,omitempty"`
 }
 
 type State struct {

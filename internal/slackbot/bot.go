@@ -124,6 +124,10 @@ func (b *Bot) handleMessage(ctx context.Context, ev slackevents.MessageEvent) er
 		b.logger.Infof("slack channel mention via message event: channel=%s user=%s thread_ts=%s ts=%s", ev.Channel, ev.User, ev.ThreadTimeStamp, ev.TimeStamp)
 		return b.processMessage(ctx, ev.Channel, ev.User, ev.Text, ev.ThreadTimeStamp, ev.TimeStamp, true)
 	}
+	if ev.ThreadTimeStamp != "" && b.service.HasThreadSession(ev.Channel, ev.ThreadTimeStamp) {
+		b.logger.Infof("slack thread continuation: channel=%s user=%s thread_ts=%s ts=%s", ev.Channel, ev.User, ev.ThreadTimeStamp, ev.TimeStamp)
+		return b.processMessage(ctx, ev.Channel, ev.User, ev.Text, ev.ThreadTimeStamp, ev.TimeStamp, false)
+	}
 	b.logger.Debugf("ignored non-dm message event: channel=%s channel_type=%s user=%s ts=%s", ev.Channel, ev.ChannelType, ev.User, ev.TimeStamp)
 	return nil
 }
@@ -160,6 +164,9 @@ func (b *Bot) processMessage(ctx context.Context, channelID, userID, rawText, th
 	}
 
 	normalizedThreadTS := normalizeThreadTS(threadTS, messageTS, preferThread)
+	if err := b.service.MarkThreadSessionActive(channelID, normalizedThreadTS); err != nil {
+		return fmt.Errorf("mark thread session active: %w", err)
+	}
 	b.logger.Infof("thread decision: channel=%s message_ts=%s incoming_thread_ts=%s prefer_thread=%t resolved_thread_ts=%s", channelID, messageTS, threadTS, preferThread, normalizedThreadTS)
 
 	scope, err := b.service.ResolveScope(channelID, normalizedThreadTS)

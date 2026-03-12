@@ -230,6 +230,25 @@ func (s *Service) SetQuiet(channelID, threadTS string, quiet bool) (string, erro
 	return fmt.Sprintf("channel quiet set to %t", quiet), nil
 }
 
+func (s *Service) MarkThreadSessionActive(channelID, threadTS string) error {
+	if threadTS == "" {
+		return nil
+	}
+	threadKey := channelID + ":" + threadTS
+	state := s.store.GetThread(threadKey)
+	state.SessionActive = true
+	return s.store.SetThread(threadKey, state)
+}
+
+func (s *Service) HasThreadSession(channelID, threadTS string) bool {
+	if threadTS == "" {
+		return false
+	}
+	threadKey := channelID + ":" + threadTS
+	state := s.store.GetThread(threadKey)
+	return state.SessionActive
+}
+
 func (s *Service) UseProject(channelID, threadTS, name string) (string, error) {
 	if _, ok := s.projects.Get(name); !ok {
 		return "", fmt.Errorf("project %q not found", name)
@@ -259,7 +278,7 @@ func (s *Service) ClearProject(channelID, threadTS string) (string, error) {
 	}
 	threadState := s.store.GetThread(scope.ThreadKey)
 	threadState.Project = ""
-	if threadState.Agent == "" && threadState.Quiet == nil {
+	if threadState.Agent == "" && threadState.Quiet == nil && !threadState.SessionActive {
 		if err := s.store.ClearThread(scope.ThreadKey); err != nil {
 			return "", err
 		}
@@ -301,7 +320,7 @@ func (s *Service) ClearAgent(channelID, threadTS string) (string, error) {
 		}
 		threadState := s.store.GetThread(scope.ThreadKey)
 		threadState.Agent = ""
-		if threadState.Project == "" {
+		if threadState.Project == "" && threadState.Quiet == nil && !threadState.SessionActive {
 			if err := s.store.ClearThread(scope.ThreadKey); err != nil {
 				return "", err
 			}
