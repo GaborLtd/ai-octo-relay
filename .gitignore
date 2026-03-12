@@ -1,0 +1,7 @@
+.DS_Store
+.env
+config.json
+data/
+bin/
+.gocache/
+.gomodcache/

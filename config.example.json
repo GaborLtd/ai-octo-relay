@@ -1,0 +1,84 @@
+{
+  "command_prefix": "!",
+  "default_agent": "codex",
+  "store_path": "data/state.json",
+  "log_level": "info",
+  "quiet_by_default": true,
+  "slack": {
+    "app_token": "",
+    "bot_token": "",
+    "allowed_channels": []
+  },
+  "projects": [
+    {
+      "name": "backend-api",
+      "path": "/Users/yourname/git/backend-api",
+      "default_agent": "claude",
+      "channel_ids": ["C1234567890"]
+    },
+    {
+      "name": "frontend-web",
+      "path": "/Users/yourname/git/frontend-web",
+      "default_agent": "gemini",
+      "channel_ids": ["C2345678901"]
+    }
+  ],
+  "agents": {
+    "codex": {
+      "adapter": "codex",
+      "command": "codex",
+      "mode": "oneshot",
+      "transport": "stdio",
+      "args": [
+        "exec",
+        "--skip-git-repo-check",
+        "--color",
+        "never",
+        "--output-last-message",
+        "{{last_message_path}}",
+        "-C",
+        "{{project_path}}",
+        "-"
+      ],
+      "env": {},
+      "timeout_seconds": 1800,
+      "response_idle_ms": 1800,
+      "first_chunk_timeout_ms": 30000,
+      "session_idle_ms": 900000,
+      "startup_wait_ms": 1500
+    },
+    "claude": {
+      "adapter": "claude",
+      "command": "claude",
+      "mode": "persistent",
+      "transport": "pty",
+      "interactive_args": [],
+      "args": [
+        "{{prompt}}"
+      ],
+      "env": {},
+      "timeout_seconds": 1800,
+      "response_idle_ms": 1800,
+      "first_chunk_timeout_ms": 30000,
+      "session_idle_ms": 900000,
+      "startup_wait_ms": 1500
+    },
+    "gemini": {
+      "adapter": "gemini",
+      "command": "gemini",
+      "mode": "persistent",
+      "transport": "pty",
+      "interactive_args": [],
+      "args": [
+        "-p",
+        "{{prompt}}"
+      ],
+      "env": {},
+      "timeout_seconds": 1800,
+      "response_idle_ms": 1800,
+      "first_chunk_timeout_ms": 30000,
+      "session_idle_ms": 900000,
+      "startup_wait_ms": 1500
+    }
+  }
+}
