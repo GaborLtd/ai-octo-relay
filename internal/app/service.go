@@ -316,17 +316,9 @@ func (s *Service) ValidateDMCommandAccess(command string, args []string) error {
 	}
 	switch command {
 	case "cmd":
-		if len(args) > 0 && args[0] == "run" {
-			return fmt.Errorf("dm_read_only 已開啟；DM 中不可執行 !cmd run")
-		}
+		return fmt.Errorf("dm_read_only 已開啟；DM 中不可使用 !cmd，project command 只能在對應 channel/thread 中執行")
 	case "git":
-		if len(args) == 0 {
-			return nil
-		}
-		switch args[0] {
-		case "fetch", "pull":
-			return fmt.Errorf("dm_read_only 已開啟；DM 中不可執行 !git %s", args[0])
-		}
+		return fmt.Errorf("dm_read_only 已開啟；DM 中不可使用 !git，git 操作只能在對應 channel/thread 中執行")
 	}
 	return nil
 }

@@ -91,6 +91,6 @@
 ### DM read-only 延伸到命令
 
 - 若 `dm_read_only = true`
-- DM 中拒絕 `!cmd run`
-- DM 中拒絕 `!git fetch` / `!git pull`
-- 避免在私人對話中誤觸會改變專案狀態的操作
+- DM 中拒絕所有 `!cmd`
+- DM 中拒絕所有 `!git`
+- 明確把 project/OS scope 操作限制在對應 channel/thread

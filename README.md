@@ -146,7 +146,8 @@
 
 - `!cmd run` 可能真的修改專案狀態
 - `!git fetch`、`!git pull` 也會改變本機 git 狀態
-- 若 `dm_read_only = true`，DM 中會拒絕 `!cmd run`、`!git fetch`、`!git pull`
+- 若 `dm_read_only = true`，DM 中會直接拒絕所有 `!cmd` 與 `!git`
+- project command、git、以及任何 project/OS scope 的操作，都應只在對應 channel/thread 中執行
 
 ## 設定
 
@@ -196,7 +197,7 @@ log 等級可在設定檔控制：
 "dm_read_only": true
 ```
 
-開啟後，DM 內的 agent 只應做分析、解釋、review 與建議，不應修改檔案或執行會改動專案狀態的操作。
+開啟後，DM 內的 agent 只應做分析、解釋、review 與建議，不應修改檔案，也不應執行任何 project/OS scope 的操作。
 
 目前內建策略：
 
@@ -204,6 +205,7 @@ log 等級可在設定檔控制：
 - `claude`: 會改用 `--permission-mode plan`
 - `gemini`: 會改用 `--approval-mode plan --sandbox`
 - 另外仍會附加 read-only prompt，作為第二層防線
+- 同時 DM 會拒絕 `!cmd` 與 `!git`，避免 project/OS 行為落在錯的 scope
 
 ## 執行
 
@@ -381,6 +383,7 @@ Slack 訊息可直接指定 agent，例如：
 - DM 不強制 thread 模型
 - DM session 一旦建立，也會鎖定 agent；若要改 agent，請先重開 session
 - 若 `dm_read_only = true`，DM 預設只回答問題，不修改專案
+- `!cmd` 與 `!git` 只允許在 project 對應的 channel/thread 中使用
 - channel 內的行為不受影響，仍可正常執行修改任務
 
 ## 建議配置方式

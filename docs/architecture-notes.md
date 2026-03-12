@@ -298,11 +298,10 @@ Slack 只支援有限的 markdown / mrkdwn。
 
 若 `dm_read_only = true`：
 
-- DM 中不允許 `!cmd run`
-- DM 中不允許 `!git fetch`
-- DM 中不允許 `!git pull`
+- DM 中不允許任何 `!cmd`
+- DM 中不允許任何 `!git`
 
-這是刻意設計，避免使用者在 DM 中誤觸會改變專案狀態的操作。
+這是刻意設計，因為 project command、git、以及任何 project/OS scope 的操作，都應只在對應 channel/thread 中進行。
 
 ### 使用原則
 

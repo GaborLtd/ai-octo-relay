@@ -179,5 +179,6 @@ Slack 不一定會對 channel mention 給 `app_mention`。
 `dm_read_only = true` 時：
 
 - 應避免在 DM 中執行會改變專案狀態的命令
-- 至少要阻擋 `!cmd run`
-- 至少要阻擋 `!git fetch` 與 `!git pull`
+- 直接阻擋所有 `!cmd`
+- 直接阻擋所有 `!git`
+- project 與 OS scope 的操作只應在對應 channel/thread 中執行
