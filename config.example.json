@@ -43,10 +43,14 @@
     "claude": {
       "adapter": "claude",
       "command": "claude",
-      "mode": "persistent",
-      "transport": "pty",
-      "interactive_args": [],
+      "mode": "oneshot",
+      "transport": "stdio",
       "args": [
+        "-p",
+        "--output-format",
+        "text",
+        "--session-id",
+        "{{native_session_id}}",
         "{{prompt}}"
       ],
       "env": {},
@@ -59,10 +63,11 @@
     "gemini": {
       "adapter": "gemini",
       "command": "gemini",
-      "mode": "persistent",
-      "transport": "pty",
-      "interactive_args": [],
+      "mode": "oneshot",
+      "transport": "stdio",
       "args": [
+        "--output-format",
+        "json",
         "-p",
         "{{prompt}}"
       ],

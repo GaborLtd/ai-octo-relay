@@ -2,7 +2,9 @@ package agent
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -25,11 +27,17 @@ type RunRequest struct {
 	ProjectPath     string
 	Prompt          string
 	SessionKey      string
+	NativeSessionID string
 	LastMessagePath string
 	ThreadTS        string
 	ChannelID       string
 	SlackUserID     string
 	ExtraEnvVars    map[string]string
+}
+
+type RunResult struct {
+	Output          string
+	NativeSessionID string
 }
 
 type SessionInfo struct {
@@ -71,6 +79,7 @@ type ExecSpec struct {
 	FirstChunkTimeout  time.Duration
 	SessionIdleTimeout time.Duration
 	StartupWait        time.Duration
+	OutputParser       string
 }
 
 type Adapter interface {
@@ -127,15 +136,19 @@ func (r *Registry) Mode(name string) string {
 	return def.config.Mode
 }
 
-func (r *Registry) Run(ctx context.Context, req RunRequest, onChunk func(string)) (string, error) {
+func (r *Registry) Run(ctx context.Context, req RunRequest, onChunk func(string)) (RunResult, error) {
 	def, ok := r.defs[req.AgentName]
 	if !ok {
-		return "", fmt.Errorf("agent %q not found", req.AgentName)
+		return RunResult{}, fmt.Errorf("agent %q not found", req.AgentName)
 	}
 	spec := def.adapter.Build(req, def.config)
-	r.logger.Debugf("agent run spec: agent=%s mode=%s transport=%s command=%q args=%q project=%s session_key=%s capture_last_message=%t", req.AgentName, spec.Mode, spec.Transport, spec.Command, strings.Join(spec.Args, " "), req.ProjectPath, req.SessionKey, spec.CaptureLastMessage)
+	if spec.OutputParser != "" {
+		onChunk = nil
+	}
+	r.logger.Debugf("agent run spec: agent=%s mode=%s transport=%s command=%q args=%q project=%s session_key=%s native_session_id=%s capture_last_message=%t parser=%s", req.AgentName, spec.Mode, spec.Transport, spec.Command, strings.Join(spec.Args, " "), req.ProjectPath, req.SessionKey, req.NativeSessionID, spec.CaptureLastMessage, spec.OutputParser)
 	if spec.Mode == ModePersistent {
-		return r.sessions.Send(ctx, req, spec, onChunk)
+		output, err := r.sessions.Send(ctx, req, spec, onChunk)
+		return RunResult{Output: output}, err
 	}
 	return runOneShot(ctx, req, spec, onChunk)
 }
@@ -203,11 +216,15 @@ func (a genericAdapter) Build(req RunRequest, cfg config.AgentConfig) ExecSpec {
 
 func (a codexAdapter) Build(req RunRequest, cfg config.AgentConfig) ExecSpec {
 	command := firstNonEmpty(cfg.Command, "codex")
+	oneshotArgs := defaultArgs(cfg.Args, "exec", "--skip-git-repo-check", "--color", "never", "--json", "--output-last-message", "{{last_message_path}}", "-C", "{{project_path}}", "-")
+	if req.NativeSessionID != "" && len(cfg.Args) == 0 {
+		oneshotArgs = []string{"exec", "resume", "{{native_session_id}}", "--skip-git-repo-check", "--json", "--output-last-message", "{{last_message_path}}", "-"}
+	}
 	return finalizeSpec(
 		req,
 		cfg,
 		command,
-		defaultArgs(cfg.Args, "exec", "--skip-git-repo-check", "--color", "never", "--output-last-message", "{{last_message_path}}", "-C", "{{project_path}}", "-"),
+		oneshotArgs,
 		command,
 		defaultArgs(cfg.InteractiveArgs, "-C", "{{project_path}}"),
 	)
@@ -215,11 +232,15 @@ func (a codexAdapter) Build(req RunRequest, cfg config.AgentConfig) ExecSpec {
 
 func (a geminiAdapter) Build(req RunRequest, cfg config.AgentConfig) ExecSpec {
 	command := firstNonEmpty(cfg.Command, "gemini")
+	oneshotArgs := defaultArgs(cfg.Args, "--output-format", "json", "-p", "{{prompt}}")
+	if req.NativeSessionID != "" && len(cfg.Args) == 0 {
+		oneshotArgs = []string{"--resume", "{{native_session_id}}", "--output-format", "json", "-p", "{{prompt}}"}
+	}
 	return finalizeSpec(
 		req,
 		cfg,
 		command,
-		defaultArgs(cfg.Args, "-p", "{{prompt}}"),
+		oneshotArgs,
 		command,
 		cfg.InteractiveArgs,
 	)
@@ -227,11 +248,12 @@ func (a geminiAdapter) Build(req RunRequest, cfg config.AgentConfig) ExecSpec {
 
 func (a claudeAdapter) Build(req RunRequest, cfg config.AgentConfig) ExecSpec {
 	command := firstNonEmpty(cfg.Command, "claude")
+	oneshotArgs := defaultArgs(cfg.Args, "-p", "--output-format", "text", "--session-id", "{{native_session_id}}", "{{prompt}}")
 	return finalizeSpec(
 		req,
 		cfg,
 		command,
-		defaultArgs(cfg.Args, "{{prompt}}"),
+		oneshotArgs,
 		command,
 		cfg.InteractiveArgs,
 	)
@@ -269,10 +291,11 @@ func finalizeSpec(req RunRequest, cfg config.AgentConfig, oneshotCommand string,
 		FirstChunkTimeout:  durationMillisWithDefault(cfg.FirstChunkTimeoutMS, 30000*time.Millisecond),
 		SessionIdleTimeout: durationMillisWithDefault(cfg.SessionIdleMS, 900000*time.Millisecond),
 		StartupWait:        durationMillisWithDefault(cfg.StartupWaitMS, 1200*time.Millisecond),
+		OutputParser:       inferOutputParser(req.AgentName, mode),
 	}
 }
 
-func runOneShot(ctx context.Context, req RunRequest, spec ExecSpec, onChunk func(string)) (string, error) {
+func runOneShot(ctx context.Context, req RunRequest, spec ExecSpec, onChunk func(string)) (RunResult, error) {
 	if spec.Timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, spec.Timeout)
@@ -282,7 +305,7 @@ func runOneShot(ctx context.Context, req RunRequest, spec ExecSpec, onChunk func
 	if spec.CaptureLastMessage && req.LastMessagePath == "" {
 		tempFile, err := os.CreateTemp("", "ai-octo-relay-last-message-*.txt")
 		if err != nil {
-			return "", fmt.Errorf("create last message temp file: %w", err)
+			return RunResult{}, fmt.Errorf("create last message temp file: %w", err)
 		}
 		req.LastMessagePath = tempFile.Name()
 		_ = tempFile.Close()
@@ -301,60 +324,62 @@ func runOneShot(ctx context.Context, req RunRequest, spec ExecSpec, onChunk func
 	if stdinUsed {
 		stdin, err = cmd.StdinPipe()
 		if err != nil {
-			return "", fmt.Errorf("create stdin pipe: %w", err)
+			return RunResult{}, fmt.Errorf("create stdin pipe: %w", err)
 		}
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return "", fmt.Errorf("create stdout pipe: %w", err)
+		return RunResult{}, fmt.Errorf("create stdout pipe: %w", err)
 	}
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
-		return "", fmt.Errorf("create stderr pipe: %w", err)
+		return RunResult{}, fmt.Errorf("create stderr pipe: %w", err)
 	}
 
 	if err := cmd.Start(); err != nil {
-		return "", fmt.Errorf("start command: %w", err)
+		return RunResult{}, fmt.Errorf("start command: %w", err)
 	}
 
 	var (
-		wg      sync.WaitGroup
-		builder strings.Builder
-		writeMu sync.Mutex
+		wg        sync.WaitGroup
+		stdoutBuf bytes.Buffer
+		stderrBuf bytes.Buffer
+		writeMu   sync.Mutex
 	)
 
-	consume := func(reader io.Reader) {
+	consume := func(reader io.Reader, target *bytes.Buffer, streamChunks bool) {
 		defer wg.Done()
 		scanner := bufio.NewScanner(reader)
 		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 		for scanner.Scan() {
-			line := sanitizeOutput(scanner.Text())
-			if strings.TrimSpace(line) == "" {
+			rawLine := scanner.Text()
+			line := sanitizeOutput(rawLine)
+			if strings.TrimSpace(line) == "" && strings.TrimSpace(rawLine) == "" {
 				continue
 			}
 			writeMu.Lock()
-			builder.WriteString(line)
-			builder.WriteByte('\n')
+			target.WriteString(rawLine)
+			target.WriteByte('\n')
 			writeMu.Unlock()
-			if onChunk != nil {
+			if streamChunks && onChunk != nil && line != "" {
 				onChunk(line)
 			}
 		}
 	}
 
 	wg.Add(2)
-	go consume(stdout)
-	go consume(stderr)
+	go consume(stdout, &stdoutBuf, true)
+	go consume(stderr, &stderrBuf, false)
 
 	if stdinUsed {
 		if _, err := io.WriteString(stdin, req.Prompt); err != nil {
 			_ = stdin.Close()
-			return "", fmt.Errorf("write prompt: %w", err)
+			return RunResult{}, fmt.Errorf("write prompt: %w", err)
 		}
 		if !strings.HasSuffix(req.Prompt, "\n") {
 			if _, err := io.WriteString(stdin, "\n"); err != nil {
 				_ = stdin.Close()
-				return "", fmt.Errorf("terminate prompt: %w", err)
+				return RunResult{}, fmt.Errorf("terminate prompt: %w", err)
 			}
 		}
 		_ = stdin.Close()
@@ -362,7 +387,23 @@ func runOneShot(ctx context.Context, req RunRequest, spec ExecSpec, onChunk func
 
 	waitErr := cmd.Wait()
 	wg.Wait()
-	output := strings.TrimSpace(builder.String())
+	stdoutText := strings.TrimSpace(stdoutBuf.String())
+	stderrText := strings.TrimSpace(stderrBuf.String())
+	output := stdoutText
+	nativeSessionID := req.NativeSessionID
+	if parsedOutput, parsedSessionID, ok := parseStructuredOutput(spec.OutputParser, stdoutText); ok {
+		if parsedOutput != "" {
+			output = parsedOutput
+		}
+		if parsedSessionID != "" {
+			nativeSessionID = parsedSessionID
+		}
+	}
+	if nativeSessionID == req.NativeSessionID && stderrText != "" {
+		if _, parsedSessionID, ok := parseStructuredOutput(spec.OutputParser, stderrText); ok && parsedSessionID != "" {
+			nativeSessionID = parsedSessionID
+		}
+	}
 	if spec.CaptureLastMessage && req.LastMessagePath != "" {
 		if content, err := os.ReadFile(req.LastMessagePath); err == nil {
 			lastMessage := strings.TrimSpace(string(content))
@@ -373,11 +414,17 @@ func runOneShot(ctx context.Context, req RunRequest, spec ExecSpec, onChunk func
 	}
 	if waitErr != nil {
 		if output == "" {
-			return "", fmt.Errorf("command failed: %w", waitErr)
+			if stderrText != "" {
+				output = stderrText
+			}
+			return RunResult{Output: output, NativeSessionID: nativeSessionID}, fmt.Errorf("command failed: %w", waitErr)
 		}
-		return output, fmt.Errorf("command failed: %w", waitErr)
+		return RunResult{Output: output, NativeSessionID: nativeSessionID}, fmt.Errorf("command failed: %w", waitErr)
 	}
-	return output, nil
+	if output == "" {
+		output = stderrText
+	}
+	return RunResult{Output: output, NativeSessionID: nativeSessionID}, nil
 }
 
 func containsPromptTemplate(args []string) bool {
@@ -445,9 +492,89 @@ func expandTemplate(input string, req RunRequest) string {
 		"{{thread_ts}}", req.ThreadTS,
 		"{{slack_user_id}}", req.SlackUserID,
 		"{{session_key}}", req.SessionKey,
+		"{{native_session_id}}", req.NativeSessionID,
 		"{{last_message_path}}", req.LastMessagePath,
 	)
 	return replacer.Replace(input)
+}
+
+func inferOutputParser(agentName, mode string) string {
+	if mode != ModeOneShot {
+		return ""
+	}
+	switch strings.ToLower(agentName) {
+	case "codex":
+		return "codex-jsonl"
+	case "gemini":
+		return "gemini-json"
+	default:
+		return ""
+	}
+}
+
+func parseStructuredOutput(parser, stdoutText string) (string, string, bool) {
+	switch parser {
+	case "codex-jsonl":
+		return parseCodexJSONL(stdoutText)
+	case "gemini-json":
+		return parseGeminiJSON(stdoutText)
+	default:
+		return "", "", false
+	}
+}
+
+func parseCodexJSONL(stdoutText string) (string, string, bool) {
+	var sessionID string
+	for _, line := range strings.Split(stdoutText, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || !strings.HasPrefix(line, "{") {
+			continue
+		}
+		var payload any
+		if err := json.Unmarshal([]byte(line), &payload); err != nil {
+			continue
+		}
+		if sessionID == "" {
+			sessionID = findStringValue(payload, "session_id", "sessionId", "session", "conversation_id")
+		}
+	}
+	return "", sessionID, sessionID != ""
+}
+
+func parseGeminiJSON(stdoutText string) (string, string, bool) {
+	var payload struct {
+		SessionID string `json:"session_id"`
+		Response  string `json:"response"`
+	}
+	if err := json.Unmarshal([]byte(stdoutText), &payload); err != nil {
+		return "", "", false
+	}
+	return strings.TrimSpace(payload.Response), strings.TrimSpace(payload.SessionID), true
+}
+
+func findStringValue(value any, keys ...string) string {
+	switch typed := value.(type) {
+	case map[string]any:
+		for _, key := range keys {
+			if v, ok := typed[key]; ok {
+				if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
+					return strings.TrimSpace(s)
+				}
+			}
+		}
+		for _, v := range typed {
+			if result := findStringValue(v, keys...); result != "" {
+				return result
+			}
+		}
+	case []any:
+		for _, item := range typed {
+			if result := findStringValue(item, keys...); result != "" {
+				return result
+			}
+		}
+	}
+	return ""
 }
 
 func mergeEnv(base []string, groups ...map[string]string) []string {

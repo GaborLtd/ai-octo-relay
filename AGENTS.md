@@ -54,20 +54,23 @@
 
 - `oneshot`
 - `codex exec ...`
+- thread 續聊時優先用 `codex exec resume`
 
 原因：
 
-- persistent 模式在目前驗證下不夠穩
+- PTY/persistent 模式在目前驗證下不夠穩
 - 已遇過 cursor / terminal 相容性問題
 
 除非重新驗證新版 CLI，否則不要把 `codex` 預設改回 persistent。
 
 ### claude / gemini
 
-目前可用 persistent session：
+目前主推：
 
-- `mode = persistent`
-- `transport = pty`
+- `mode = oneshot`
+- 同一個 thread 優先靠 CLI 原生 `resume` 或 `session-id` 延續上下文
+
+不要再把 PTY/persistent 當成主流程。
 
 ## 4. Slack 回覆規則
 

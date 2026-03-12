@@ -15,9 +15,19 @@ type ScopeState struct {
 	SessionActive bool   `json:"session_active,omitempty"`
 }
 
+type NativeSessionState struct {
+	Agent     string `json:"agent"`
+	NativeID  string `json:"native_id"`
+	UpdatedAt string `json:"updated_at,omitempty"`
+	Project   string `json:"project,omitempty"`
+	ThreadKey string `json:"thread_key,omitempty"`
+	ChannelID string `json:"channel_id,omitempty"`
+}
+
 type State struct {
-	Channels map[string]ScopeState `json:"channels"`
-	Threads  map[string]ScopeState `json:"threads"`
+	Channels map[string]ScopeState         `json:"channels"`
+	Threads  map[string]ScopeState         `json:"threads"`
+	Sessions map[string]NativeSessionState `json:"sessions"`
 }
 
 type JSONStore struct {
@@ -32,6 +42,7 @@ func NewJSONStore(path string) (*JSONStore, error) {
 		state: State{
 			Channels: map[string]ScopeState{},
 			Threads:  map[string]ScopeState{},
+			Sessions: map[string]NativeSessionState{},
 		},
 	}
 
@@ -68,6 +79,9 @@ func (s *JSONStore) load() error {
 	if s.state.Threads == nil {
 		s.state.Threads = map[string]ScopeState{}
 	}
+	if s.state.Sessions == nil {
+		s.state.Sessions = map[string]NativeSessionState{}
+	}
 	return nil
 }
 
@@ -83,9 +97,14 @@ func (s *JSONStore) Snapshot() State {
 	for key, value := range s.state.Threads {
 		threads[key] = value
 	}
+	sessions := make(map[string]NativeSessionState, len(s.state.Sessions))
+	for key, value := range s.state.Sessions {
+		sessions[key] = value
+	}
 	return State{
 		Channels: channels,
 		Threads:  threads,
+		Sessions: sessions,
 	}
 }
 
@@ -126,6 +145,26 @@ func (s *JSONStore) ClearThread(threadKey string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.state.Threads, threadKey)
+	return s.saveLocked()
+}
+
+func (s *JSONStore) GetSession(sessionKey string) NativeSessionState {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.state.Sessions[sessionKey]
+}
+
+func (s *JSONStore) SetSession(sessionKey string, state NativeSessionState) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.state.Sessions[sessionKey] = state
+	return s.saveLocked()
+}
+
+func (s *JSONStore) ClearSession(sessionKey string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.state.Sessions, sessionKey)
 	return s.saveLocked()
 }
 

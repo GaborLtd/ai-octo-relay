@@ -2,9 +2,12 @@ package app
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/match/ai-octo-relay/internal/agent"
 	"github.com/match/ai-octo-relay/internal/config"
@@ -58,6 +61,7 @@ func (s *Service) HelpText() string {
 		s.cfg.CommandPrefix + "reset",
 		"",
 		"非指令訊息會送到目前選擇的 project + agent 執行。",
+		"同一個 thread 會優先沿用各 CLI 自己的 session/resume 能力。",
 	}, "\n")
 }
 
@@ -297,8 +301,10 @@ func (s *Service) UseAgent(channelID, threadTS, name string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		scope.AgentName = name
-		if err := s.store.SetThread(scope.ThreadKey, store.ScopeState{Project: scope.ProjectName, Agent: scope.AgentName}); err != nil {
+		threadState := s.store.GetThread(scope.ThreadKey)
+		threadState.Project = scope.ProjectName
+		threadState.Agent = name
+		if err := s.store.SetThread(scope.ThreadKey, threadState); err != nil {
 			return "", err
 		}
 		return "thread agent set to " + name, nil
@@ -351,6 +357,9 @@ func (s *Service) Reset(channelID, threadTS string) (string, error) {
 		if err := s.store.ClearThread(scope.ThreadKey); err != nil {
 			return "", err
 		}
+		if err := s.store.ClearSession(scope.SessionKey); err != nil {
+			return "", err
+		}
 		return "thread overrides cleared", nil
 	}
 	if err := s.store.ClearChannel(channelID); err != nil {
@@ -373,15 +382,25 @@ func (s *Service) RunPrompt(ctx context.Context, channelID, threadTS, slackUserI
 		return "", fmt.Errorf("agent %q not found", scope.AgentName)
 	}
 
+	nativeSession := s.store.GetSession(scope.SessionKey)
+	nativeSessionID := nativeSession.NativeID
+	if nativeSessionID == "" && scope.AgentName == "claude" {
+		nativeSessionID, err = newSessionUUID()
+		if err != nil {
+			return "", fmt.Errorf("generate claude session id: %w", err)
+		}
+	}
+
 	req := agent.RunRequest{
-		AgentName:   scope.AgentName,
-		ProjectName: scope.ProjectName,
-		ProjectPath: projectCfg.Path,
-		Prompt:      prompt,
-		SessionKey:  scope.SessionKey,
-		ThreadTS:    threadTS,
-		ChannelID:   channelID,
-		SlackUserID: slackUserID,
+		AgentName:       scope.AgentName,
+		ProjectName:     scope.ProjectName,
+		ProjectPath:     projectCfg.Path,
+		Prompt:          prompt,
+		SessionKey:      scope.SessionKey,
+		ThreadTS:        threadTS,
+		ChannelID:       channelID,
+		SlackUserID:     slackUserID,
+		NativeSessionID: nativeSessionID,
 		ExtraEnvVars: map[string]string{
 			"AI_OCTO_PROJECT":    projectCfg.Name,
 			"AI_OCTO_CHANNEL_ID": channelID,
@@ -390,13 +409,35 @@ func (s *Service) RunPrompt(ctx context.Context, channelID, threadTS, slackUserI
 		},
 	}
 
-	return s.agents.Run(ctx, req, onChunk)
+	result, err := s.agents.Run(ctx, req, onChunk)
+	if result.NativeSessionID != "" && result.NativeSessionID != nativeSession.NativeID {
+		if saveErr := s.store.SetSession(scope.SessionKey, store.NativeSessionState{
+			Agent:     scope.AgentName,
+			NativeID:  result.NativeSessionID,
+			UpdatedAt: time.Now().Format(time.RFC3339),
+			Project:   scope.ProjectName,
+			ThreadKey: scope.ThreadKey,
+			ChannelID: channelID,
+		}); saveErr != nil {
+			return "", saveErr
+		}
+	}
+	return result.Output, err
 }
 
 func (s *Service) SessionStatusText(channelID, threadTS string) (string, error) {
 	scope, err := s.ResolveScope(channelID, threadTS)
 	if err != nil {
 		return "", err
+	}
+	if native := s.store.GetSession(scope.SessionKey); native.NativeID != "" {
+		return fmt.Sprintf(
+			"session: active\nkey: %s\nagent: %s\nmode: native-resume\nnative_session_id: %s\nupdated_at: %s",
+			scope.SessionKey,
+			scope.AgentName,
+			native.NativeID,
+			native.UpdatedAt,
+		), nil
 	}
 	info, ok := s.agents.SessionStatus(scope.SessionKey)
 	if !ok {
@@ -417,6 +458,12 @@ func (s *Service) RestartSession(ctx context.Context, channelID, threadTS, slack
 	scope, err := s.ResolveScope(channelID, threadTS)
 	if err != nil {
 		return "", err
+	}
+	if s.agents.Mode(scope.AgentName) != agent.ModePersistent {
+		if err := s.store.ClearSession(scope.SessionKey); err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("native session cleared\nkey: %s\nagent: %s", scope.SessionKey, scope.AgentName), nil
 	}
 	projectCfg, ok := s.projects.Get(scope.ProjectName)
 	if !ok {
@@ -448,8 +495,32 @@ func (s *Service) CloseSession(channelID, threadTS string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if err := s.store.ClearSession(scope.SessionKey); err != nil {
+		return "", err
+	}
+	if s.agents.Mode(scope.AgentName) != agent.ModePersistent {
+		return "session closed", nil
+	}
 	if err := s.agents.CloseSession(scope.SessionKey); err != nil {
 		return "", err
 	}
 	return "session closed", nil
+}
+
+func newSessionUUID() (string, error) {
+	var raw [16]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", err
+	}
+	raw[6] = (raw[6] & 0x0f) | 0x40
+	raw[8] = (raw[8] & 0x3f) | 0x80
+	hexValue := hex.EncodeToString(raw[:])
+	return fmt.Sprintf(
+		"%s-%s-%s-%s-%s",
+		hexValue[0:8],
+		hexValue[8:12],
+		hexValue[12:16],
+		hexValue[16:20],
+		hexValue[20:32],
+	), nil
 }

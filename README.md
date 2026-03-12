@@ -10,8 +10,8 @@
 - `thread = 單一問題 / 單一 session`
 - `projects[].channel_ids` 決定 channel 對應的 project
 - 在 thread 中後續追問，不需要再 mention bot
-- `codex` 預設使用 `oneshot`
-- `claude` / `gemini` 可用 persistent session
+- 所有 agent 預設使用 `oneshot`
+- 同一個 thread 會優先沿用 CLI 原生 `resume/session-id` 記憶
 - Slack 回覆會做清理與自動分段發送
 
 先看文件：
@@ -28,7 +28,7 @@
 - 以 `channel_id -> project` 固定綁定 channel 與 project
 - thread 可覆寫 project / agent
 - 透過本機 CLI 執行 `codex` / `claude` / `gemini`
-- persistent session，可在同一個 thread 持續互動
+- 同一個 thread 可透過 CLI 原生 session/resume 延續上下文
 - 使用 JSON 檔持久化狀態
 
 ## MVP 範圍
@@ -37,8 +37,9 @@
 
 - 不做 multiple bot relay
 - 不做多平台
-- session 狀態不跨 process restart 保留
-- 長駐 session 使用「輸出 idle」判斷單回合結束
+- native session id 會保存在本機 state store
+- 不再主推 PTY persistent/TUI 模式
+- 目前 store 採 JSON；若未來 session/history 資料量變大，可再切 SQLite
 
 這樣可以先滿足「人在外面，用手機從 Slack 控制家裡電腦上的專案」。
 
@@ -71,7 +72,7 @@
 - 在 thread 內執行 `!project use`，只更新該 thread 覆寫
 - 在 channel 中直接提問時，bot 會自動用那則根訊息建立 thread session
 - 同一個 thread 內的後續互動會沿用同一個 session
-- 若 agent 設為 `persistent`，同一個 `thread + project + agent` 會共用同一個長駐 session
+- 同一個 `thread + project + agent` 會優先沿用該 CLI 的原生 session/resume 能力
 
 ## 設定
 
@@ -205,8 +206,8 @@ slack-manifest.yaml
 - `adapter`: `codex` / `gemini` / `claude` / `generic`
 - `command`: CLI 指令名稱
 - `args`: 單次執行參數
-- `interactive_command`: persistent session 使用的指令
-- `interactive_args`: persistent session 使用的參數
+- `interactive_command`: 若未來重新啟用 persistent session，可指定互動模式指令
+- `interactive_args`: 若未來重新啟用 persistent session，可指定互動模式參數
 - `env`: 額外環境變數
 - `mode`: `oneshot` 或 `persistent`
 - `transport`: `stdio` 或 `pty`
@@ -226,6 +227,7 @@ placeholder：
 - `{{thread_ts}}`
 - `{{slack_user_id}}`
 - `{{session_key}}`
+- `{{native_session_id}}`
 - `{{last_message_path}}`
 
 ## 建議配置方式
@@ -280,18 +282,17 @@ placeholder：
 
 目前本機已確認：
 
-- `codex` 支援 `codex exec ... -` 的 non-interactive 模式
-- `gemini` 支援 `gemini -p "<prompt>"` 的 non-interactive 模式
+- `codex` 支援 `codex exec` 與 `codex exec resume`
+- `gemini` 支援 non-interactive 模式，且提供 `--resume`
 - Claude Code 套件在本機的 binary 名稱是 `claude`
-- `claude` 是否可用取決於你的本機安裝與 PATH
+- `claude` 是否可用取決於你的本機安裝、登入方式與 PATH
 
 目前預設建議：
 
-- `codex` 用 `oneshot` 模式，較穩定
-- `gemini` / `claude` 可用 `persistent` 模式
+- 三個 agent 都先使用 `oneshot`
+- 同一個 thread 的上下文優先靠各 CLI 原生 `resume/session-id` 能力維持
 
-原因是 `codex` 的互動 TUI 會讀取 cursor position；在某些 PTY/session 環境下會直接退出。
-如果你之後升級到較新的 `codex` 版本，再來重新評估是否恢復 persistent。
+原因是 `codex` / `gemini` 的互動 TUI 在 PTY/session 環境下都曾出現終端控制輸出污染或相容性問題。
 
 如果 `claude` 不在 PATH，請直接把 `command` 改成完整路徑。
 

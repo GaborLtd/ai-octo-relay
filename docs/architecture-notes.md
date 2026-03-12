@@ -99,6 +99,7 @@ channel
 
 - `mode = oneshot`
 - 走 `codex exec ...`
+- 同一個 thread 續聊時優先走 `codex exec resume ...`
 
 原因：
 
@@ -107,22 +108,19 @@ channel
 - 曾實際遇到：
   - `The cursor position could not be read within a normal duration`
 
-因此目前不建議對 `codex` 啟用 persistent session，除非未來驗證新版 CLI 已可穩定運作。
+因此目前不建議對 `codex` 啟用 PTY persistent session，除非未來驗證新版 CLI 已可穩定運作。
 
 ### claude / gemini
 
-目前可走 persistent session：
+目前主推：
 
-- `mode = persistent`
-- `transport = pty`
+- `mode = oneshot`
+- 優先使用 CLI 原生 `resume` / `session-id` 能力延續上下文
 
-回合結束判定採：
+理由：
 
-- 輸出 idle timeout
-
-也就是：
-
-- prompt 送出後，只要一段時間沒有新的輸出，就視為這回合完成
+- `gemini` 的 PTY/persistent 模式也曾實際噴出 terminal control sequence
+- 對 Slack 這種聊天介面來說，machine-readable oneshot 更穩定
 
 ## 5. Session 邊界
 
@@ -246,16 +244,43 @@ Slack 只支援有限的 markdown / mrkdwn。
 - 一般互動行為都應該能在 `info` 看到
 - `debug` / `trace` 只負責更細節的診斷
 
-## 11. 已知限制
+## 11. Store 選型
 
-### 1. session 不跨 process restart 保留
+目前 state store 仍採：
 
-bot 重啟後，persistent session process 本身不會恢復。
-只有 channel / thread 的邏輯狀態仍保存在 JSON store。
+- JSON 檔
 
-### 2. codex persistent 目前不穩
+原因：
 
-目前不建議直接開。
+- 目前保存的資料量仍小
+- 主要只包含 channel/thread scope、thread active flag、native session id
+- 實作與部署成本最低
+
+但這不是長期綁死的決策。
+
+如果未來開始加入以下資料，應優先考慮改成 SQLite：
+
+- conversation history
+- thread summary
+- token / usage metadata
+- 更大量的 session 清理、查詢、過期需求
+
+建議方向：
+
+- 保持 store abstraction 清楚
+- 之後可新增 `sqlite_store.go`
+- JSON 作為 MVP / fallback，SQLite 作為擴充型 store
+
+## 12. 已知限制
+
+### 1. native session id 會跨 process restart 保留，但活體 process 不會
+
+bot 重啟後，不會有背景 persistent process 恢復。
+但同一個 `thread + project + agent` 已記錄的 CLI native session id 仍會保存在 JSON store。
+
+### 2. PTY persistent 目前不建議當主流程
+
+`codex` / `gemini` 都曾出現互動終端相容性或 terminal output 汙染問題。
 
 ### 3. Slack formatting 仍可再優化
 
@@ -271,7 +296,7 @@ bot 重啟後，persistent session process 本身不會恢復。
 
 目前分段策略以安全送達為主，還不是語意最漂亮的切法。
 
-## 12. 後續建議方向
+## 13. 後續建議方向
 
 如果之後要繼續演進，優先順序建議：
 
@@ -288,9 +313,9 @@ bot 重啟後，persistent session process 本身不會恢復。
 4. 改善 chunking
 - 以語意段落切分，而不是只看長度
 
-5. 重新評估新版 `codex` 是否可恢復 persistent
+5. 視需要再評估新版 `codex` / `gemini` 是否值得恢復 persistent
 
-## 13. 修改時優先看哪些檔案
+## 14. 修改時優先看哪些檔案
 
 ### 使用者互動 / Slack 行為
 
