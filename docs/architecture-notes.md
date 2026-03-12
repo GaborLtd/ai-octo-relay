@@ -28,7 +28,8 @@
 - Slack channel 固定綁定 project
 - 使用者在 channel 根訊息提問時，bot 會自動在該訊息底下 thread 回覆
 - 後續在同一個 thread 內的追問，會沿用同一個 session
-- thread 可覆寫 agent
+- thread 建立時可決定 agent，建立後會鎖定
+- 單一訊息可在新 session 建立時於開頭指定 agent name / alias
 - thread 也可暫時覆寫 project，但這是例外，不是日常主流程
 
 ### 實際模型
@@ -124,6 +125,25 @@ channel
 
 - prompt 送出後，只要一段時間沒有新的輸出，就視為這回合完成
 
+### Slack 訊息級 agent override
+
+目前支援在新 session 建立時於訊息開頭指定 agent，例如：
+
+```text
+@bot #claude 幫我看這個問題
+@bot #sonnet 幫我寫測試
+```
+
+規則：
+
+- 第一個 token 必須是 `#agent` 或 `#alias`
+- `selector` 會對應 agent 名稱或 `agents.<name>.aliases`
+- 只在新 thread / 新 DM session 建立時生效
+- 不會改掉 `projects[].default_agent`
+- 若沒有指定，仍照 project default agent / global default agent fallback
+- 裸字 `claude` / `gemini` 不會觸發 override
+- 同一 thread / DM session 不能切換到別的 agent
+
 ## 5. Session 邊界
 
 目前 session key 概念上由以下元素決定：
@@ -211,6 +231,14 @@ Slack 只支援有限的 markdown / mrkdwn。
 
 - 不強制 thread 模型
 - 直接在 DM 中對話
+- 可透過 `dm_read_only` 讓 DM 預設只做分析與回答，不做專案修改
+- DM 也會鎖定單一 agent session；若要換 agent，應重開 session
+
+目前的 DM read-only 實作不是只靠 prompt，而是會依 agent 注入對應的 CLI 限制：
+
+- `codex`: read-only sandbox
+- `claude`: plan permission mode
+- `gemini`: plan approval mode + sandbox
 
 ### Channel
 

@@ -10,14 +10,16 @@ import (
 )
 
 type Config struct {
-	CommandPrefix  string                 `json:"command_prefix"`
-	DefaultAgent   string                 `json:"default_agent"`
-	StorePath      string                 `json:"store_path"`
-	LogLevel       string                 `json:"log_level"`
-	QuietByDefault bool                   `json:"quiet_by_default"`
-	Slack          SlackConfig            `json:"slack"`
-	Projects       []ProjectConfig        `json:"projects"`
-	Agents         map[string]AgentConfig `json:"agents"`
+	CommandPrefix    string                 `json:"command_prefix"`
+	DefaultAgent     string                 `json:"default_agent"`
+	StorePath        string                 `json:"store_path"`
+	LogLevel         string                 `json:"log_level"`
+	QuietByDefault   bool                   `json:"quiet_by_default"`
+	DMReadOnly       bool                   `json:"dm_read_only"`
+	DMReadOnlyPrompt string                 `json:"dm_read_only_prompt"`
+	Slack            SlackConfig            `json:"slack"`
+	Projects         []ProjectConfig        `json:"projects"`
+	Agents           map[string]AgentConfig `json:"agents"`
 }
 
 type SlackConfig struct {
@@ -35,6 +37,7 @@ type ProjectConfig struct {
 
 type AgentConfig struct {
 	Adapter             string            `json:"adapter"`
+	Aliases             []string          `json:"aliases"`
 	Command             string            `json:"command"`
 	Args                []string          `json:"args"`
 	InteractiveCommand  string            `json:"interactive_command"`
@@ -86,6 +89,9 @@ func applyDefaults(cfg *Config) {
 	if cfg.LogLevel == "" {
 		cfg.LogLevel = "info"
 	}
+	if cfg.DMReadOnlyPrompt == "" {
+		cfg.DMReadOnlyPrompt = defaultDMReadOnlyPrompt
+	}
 	for name, agent := range cfg.Agents {
 		if agent.TimeoutSeconds <= 0 {
 			agent.TimeoutSeconds = 1800
@@ -105,9 +111,24 @@ func applyDefaults(cfg *Config) {
 		if agent.Env == nil {
 			agent.Env = map[string]string{}
 		}
+		if agent.Aliases == nil {
+			agent.Aliases = []string{}
+		}
 		cfg.Agents[name] = agent
 	}
 }
+
+const defaultDMReadOnlyPrompt = `
+
+DM mode is read-only.
+
+Rules:
+- Answer questions, explain code, review code, and suggest patches in text only.
+- Do not modify files.
+- Do not run commands that write files, change git state, install packages, or alter the system.
+- Do not propose that you already changed the project.
+- If the user asks for a change, provide analysis or a proposed diff in text instead.
+`
 
 func applyEnvOverrides(cfg *Config) {
 	if token := os.Getenv("SLACK_APP_TOKEN"); token != "" {

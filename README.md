@@ -13,6 +13,7 @@
 - `codex` 預設使用 `oneshot`
 - `claude` / `gemini` 可用 persistent session
 - Slack 回覆會做清理與自動分段發送
+- DM 預設可設為 read-only，只回答問題不修改專案
 
 先看文件：
 
@@ -26,7 +27,8 @@
 - 單一 Slack bot 接收訊息
 - 多個本機 project registry
 - 以 `channel_id -> project` 固定綁定 channel 與 project
-- thread 可覆寫 project / agent
+- thread 可覆寫 project；agent 會在 session 建立時鎖定
+- 可在訊息開頭指定 agent，例如 `@bot #claude 幫我看這段 code`
 - 透過本機 CLI 執行 `codex` / `claude` / `gemini`
 - persistent session，可在同一個 thread 持續互動
 - 使用 JSON 檔持久化狀態
@@ -72,6 +74,8 @@
 - 在 channel 中直接提問時，bot 會自動用那則根訊息建立 thread session
 - 同一個 thread 內的後續互動會沿用同一個 session
 - 若 agent 設為 `persistent`，同一個 `thread + project + agent` 會共用同一個長駐 session
+- 若訊息第一個 token 是 `#agent` 或 `#alias`，只會在新 thread / 新 DM session 建立時決定 agent
+- thread 或 DM session 一旦建立，就不能在同一 session 內切換 agent
 
 ## 設定
 
@@ -114,6 +118,21 @@ log 等級可在設定檔控制：
 - 不持續推送中間 transcript / tool progress
 - 最終回覆前會清理常見 CLI 噪音
 - 根訊息提問會自動在 thread 內回覆，閱讀會比較集中
+
+另外可設定 DM 是否預設 read-only：
+
+```json
+"dm_read_only": true
+```
+
+開啟後，DM 內的 agent 只應做分析、解釋、review 與建議，不應修改檔案或執行會改動專案狀態的操作。
+
+目前內建策略：
+
+- `codex`: 會改用 read-only sandbox
+- `claude`: 會改用 `--permission-mode plan`
+- `gemini`: 會改用 `--approval-mode plan --sandbox`
+- 另外仍會附加 read-only prompt，作為第二層防線
 
 ## 執行
 
@@ -204,6 +223,7 @@ slack-manifest.yaml
 
 - `adapter`: `codex` / `gemini` / `claude` / `generic`
 - `command`: CLI 指令名稱
+- `aliases`: 可在 Slack 訊息開頭使用的 agent 別名
 - `args`: 單次執行參數
 - `interactive_command`: persistent session 使用的指令
 - `interactive_args`: persistent session 使用的參數
@@ -227,6 +247,31 @@ placeholder：
 - `{{slack_user_id}}`
 - `{{session_key}}`
 - `{{last_message_path}}`
+
+Slack 訊息可直接指定 agent，例如：
+
+```text
+@bot #claude 幫我看這個 project 的 build error
+@bot #gemini 幫我總結這個檔案
+@bot #sonnet 幫我補測試
+```
+
+規則：
+
+- 只有 `#selector` 格式會觸發 agent override
+- `selector` 可對應 agent 名稱或 `aliases`
+- 裸字 `claude` / `gemini` / `sonnet` 不會觸發 override
+- 只有新 thread / 新 DM session 建立時才會套用 selector
+- 同一 thread / DM session 不可改用別的 agent
+
+其中 `#sonnet` 是 `claude.aliases` 的例子。
+
+### DM 模式
+
+- DM 不強制 thread 模型
+- DM session 一旦建立，也會鎖定 agent；若要改 agent，請先重開 session
+- 若 `dm_read_only = true`，DM 預設只回答問題，不修改專案
+- channel 內的行為不受影響，仍可正常執行修改任務
 
 ## 建議配置方式
 
