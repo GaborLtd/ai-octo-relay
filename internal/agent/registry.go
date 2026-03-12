@@ -26,6 +26,8 @@ type RunRequest struct {
 	ProjectName     string
 	ProjectPath     string
 	Prompt          string
+	PromptSuffix    string
+	DMReadOnly      bool
 	SessionKey      string
 	NativeSessionID string
 	LastMessagePath string
@@ -55,6 +57,7 @@ type SessionInfo struct {
 type Registry struct {
 	defs     map[string]definition
 	names    []string
+	aliases  map[string]string
 	sessions *SessionManager
 	logger   *logx.Logger
 }
@@ -89,19 +92,29 @@ type Adapter interface {
 func NewRegistry(configs map[string]config.AgentConfig, logger *logx.Logger) (*Registry, error) {
 	defs := make(map[string]definition, len(configs))
 	names := make([]string, 0, len(configs))
+	aliases := make(map[string]string, len(configs))
 	for name, cfg := range configs {
 		defs[name] = definition{
 			name:    name,
 			config:  cfg,
 			adapter: selectAdapter(name, cfg.Adapter),
 		}
+		if err := registerAgentAlias(aliases, name, name); err != nil {
+			return nil, err
+		}
+		for _, alias := range cfg.Aliases {
+			if err := registerAgentAlias(aliases, alias, name); err != nil {
+				return nil, err
+			}
+		}
 		names = append(names, name)
 	}
 	slices.Sort(names)
 	reg := &Registry{
-		defs:   defs,
-		names:  names,
-		logger: logger,
+		defs:    defs,
+		names:   names,
+		aliases: aliases,
+		logger:  logger,
 	}
 	reg.sessions = NewSessionManager(reg)
 	return reg, nil
@@ -124,23 +137,44 @@ func (r *Registry) ValidateCommands() error {
 }
 
 func (r *Registry) Has(name string) bool {
-	_, ok := r.defs[name]
+	_, ok := r.ResolveName(name)
 	return ok
 }
 
 func (r *Registry) Mode(name string) string {
-	def, ok := r.defs[name]
+	canonicalName, ok := r.ResolveName(name)
+	if !ok {
+		return ""
+	}
+	def, ok := r.defs[canonicalName]
 	if !ok {
 		return ""
 	}
 	return def.config.Mode
 }
 
+func (r *Registry) ResolveName(name string) (string, bool) {
+	if _, ok := r.defs[name]; ok {
+		return name, true
+	}
+	canonical, ok := r.aliases[normalizeAgentSelector(name)]
+	return canonical, ok
+}
+
+func (r *Registry) Aliases(name string) []string {
+	canonicalName, ok := r.ResolveName(name)
+	if !ok {
+		return nil
+	}
+	return slices.Clone(r.defs[canonicalName].config.Aliases)
+}
+
 func (r *Registry) Run(ctx context.Context, req RunRequest, onChunk func(string)) (RunResult, error) {
-	def, ok := r.defs[req.AgentName]
+	canonicalName, def, ok := r.definition(req.AgentName)
 	if !ok {
 		return RunResult{}, fmt.Errorf("agent %q not found", req.AgentName)
 	}
+	req.AgentName = canonicalName
 	spec := def.adapter.Build(req, def.config)
 	if spec.OutputParser != "" {
 		onChunk = nil
@@ -158,15 +192,45 @@ func (r *Registry) SessionStatus(sessionKey string) (SessionInfo, bool) {
 }
 
 func (r *Registry) RestartSession(ctx context.Context, req RunRequest) (SessionInfo, error) {
-	def, ok := r.defs[req.AgentName]
+	canonicalName, def, ok := r.definition(req.AgentName)
 	if !ok {
 		return SessionInfo{}, fmt.Errorf("agent %q not found", req.AgentName)
 	}
+	req.AgentName = canonicalName
 	spec := def.adapter.Build(req, def.config)
 	if spec.Mode != ModePersistent {
 		return SessionInfo{}, fmt.Errorf("agent %q is not configured for persistent sessions", req.AgentName)
 	}
 	return r.sessions.Restart(ctx, req, spec)
+}
+
+func (r *Registry) definition(name string) (string, definition, bool) {
+	canonicalName, ok := r.ResolveName(name)
+	if !ok {
+		return "", definition{}, false
+	}
+	def, ok := r.defs[canonicalName]
+	return canonicalName, def, ok
+}
+
+func registerAgentAlias(aliases map[string]string, alias, canonicalName string) error {
+	normalized := normalizeAgentSelector(alias)
+	if normalized == "" {
+		return fmt.Errorf("agent %q has an empty alias", canonicalName)
+	}
+	if existing, ok := aliases[normalized]; ok && existing != canonicalName {
+		return fmt.Errorf("agent alias %q is assigned to multiple agents: %s, %s", alias, existing, canonicalName)
+	}
+	aliases[normalized] = canonicalName
+	return nil
+}
+
+func normalizeAgentSelector(value string) string {
+	normalized := strings.TrimSpace(strings.ToLower(value))
+	normalized = strings.TrimLeft(normalized, "@")
+	normalized = strings.TrimSuffix(normalized, ":")
+	normalized = strings.TrimSpace(normalized)
+	return normalized
 }
 
 func (r *Registry) CloseSession(sessionKey string) error {
@@ -211,7 +275,8 @@ func selectAdapter(agentName, explicit string) Adapter {
 }
 
 func (a genericAdapter) Build(req RunRequest, cfg config.AgentConfig) ExecSpec {
-	return finalizeSpec(req, cfg, cfg.Command, cfg.Args, cfg.Command, cfg.InteractiveArgs)
+	spec := finalizeSpec(req, cfg, cfg.Command, cfg.Args, cfg.Command, cfg.InteractiveArgs)
+	return applyGenericDMReadOnlyPolicy(spec, req)
 }
 
 func (a codexAdapter) Build(req RunRequest, cfg config.AgentConfig) ExecSpec {
@@ -220,7 +285,7 @@ func (a codexAdapter) Build(req RunRequest, cfg config.AgentConfig) ExecSpec {
 	if req.NativeSessionID != "" && len(cfg.Args) == 0 {
 		oneshotArgs = []string{"exec", "resume", "{{native_session_id}}", "--skip-git-repo-check", "--json", "--output-last-message", "{{last_message_path}}", "-"}
 	}
-	return finalizeSpec(
+	spec := finalizeSpec(
 		req,
 		cfg,
 		command,
@@ -228,6 +293,7 @@ func (a codexAdapter) Build(req RunRequest, cfg config.AgentConfig) ExecSpec {
 		command,
 		defaultArgs(cfg.InteractiveArgs, "-C", "{{project_path}}"),
 	)
+	return applyCodexDMReadOnlyPolicy(spec, req)
 }
 
 func (a geminiAdapter) Build(req RunRequest, cfg config.AgentConfig) ExecSpec {
@@ -236,7 +302,7 @@ func (a geminiAdapter) Build(req RunRequest, cfg config.AgentConfig) ExecSpec {
 	if req.NativeSessionID != "" && len(cfg.Args) == 0 {
 		oneshotArgs = []string{"--resume", "{{native_session_id}}", "--output-format", "json", "-p", "{{prompt}}"}
 	}
-	return finalizeSpec(
+	spec := finalizeSpec(
 		req,
 		cfg,
 		command,
@@ -244,12 +310,13 @@ func (a geminiAdapter) Build(req RunRequest, cfg config.AgentConfig) ExecSpec {
 		command,
 		cfg.InteractiveArgs,
 	)
+	return applyGeminiDMReadOnlyPolicy(spec, req)
 }
 
 func (a claudeAdapter) Build(req RunRequest, cfg config.AgentConfig) ExecSpec {
 	command := firstNonEmpty(cfg.Command, "claude")
 	oneshotArgs := defaultArgs(cfg.Args, "-p", "--output-format", "text", "--session-id", "{{native_session_id}}", "{{prompt}}")
-	return finalizeSpec(
+	spec := finalizeSpec(
 		req,
 		cfg,
 		command,
@@ -257,6 +324,7 @@ func (a claudeAdapter) Build(req RunRequest, cfg config.AgentConfig) ExecSpec {
 		command,
 		cfg.InteractiveArgs,
 	)
+	return applyClaudeDMReadOnlyPolicy(spec, req)
 }
 
 func finalizeSpec(req RunRequest, cfg config.AgentConfig, oneshotCommand string, oneshotArgs []string, interactiveCommand string, interactiveArgs []string) ExecSpec {
@@ -285,7 +353,7 @@ func finalizeSpec(req RunRequest, cfg config.AgentConfig, oneshotCommand string,
 		Transport:          transport,
 		PromptInArgs:       containsPromptTemplate(args),
 		CaptureLastMessage: strings.Contains(command, "{{last_message_path}}") || containsLastMessageTemplate(args),
-		PromptSuffix:       expandTemplate(firstNonEmpty(cfg.PromptSuffix, "\n"), req),
+		PromptSuffix:       expandTemplate(firstNonEmpty(cfg.PromptSuffix, "\n"), req) + req.PromptSuffix,
 		Timeout:            durationWithDefault(cfg.TimeoutSeconds, 1800*time.Second),
 		ResponseIdle:       durationMillisWithDefault(cfg.ResponseIdleMS, 1800*time.Millisecond),
 		FirstChunkTimeout:  durationMillisWithDefault(cfg.FirstChunkTimeoutMS, 30000*time.Millisecond),
@@ -293,6 +361,84 @@ func finalizeSpec(req RunRequest, cfg config.AgentConfig, oneshotCommand string,
 		StartupWait:        durationMillisWithDefault(cfg.StartupWaitMS, 1200*time.Millisecond),
 		OutputParser:       inferOutputParser(req.AgentName, mode),
 	}
+}
+
+func applyGenericDMReadOnlyPolicy(spec ExecSpec, req RunRequest) ExecSpec {
+	if !req.DMReadOnly {
+		return spec
+	}
+	return spec
+}
+
+func applyCodexDMReadOnlyPolicy(spec ExecSpec, req RunRequest) ExecSpec {
+	if !req.DMReadOnly {
+		return spec
+	}
+	spec.Args = prependMissingOptions(spec.Args,
+		"--sandbox", "read-only",
+		"--ask-for-approval", "never",
+	)
+	return spec
+}
+
+func applyClaudeDMReadOnlyPolicy(spec ExecSpec, req RunRequest) ExecSpec {
+	if !req.DMReadOnly {
+		return spec
+	}
+	spec.Args = prependMissingOptions(spec.Args, "--permission-mode", "plan")
+	return spec
+}
+
+func applyGeminiDMReadOnlyPolicy(spec ExecSpec, req RunRequest) ExecSpec {
+	if !req.DMReadOnly {
+		return spec
+	}
+	spec.Args = prependMissingOptions(spec.Args,
+		"--approval-mode", "plan",
+		"--sandbox",
+	)
+	spec.Env["SEATBELT_PROFILE"] = "strict-open"
+	return spec
+}
+
+func prependMissingOptions(args []string, tokens ...string) []string {
+	result := slices.Clone(args)
+	for i := len(tokens) - 1; i >= 0; i-- {
+		token := tokens[i]
+		if !strings.HasPrefix(token, "--") {
+			continue
+		}
+		if i+1 < len(tokens) && !strings.HasPrefix(tokens[i+1], "--") {
+			if hasOptionWithValue(result, token, tokens[i+1]) {
+				continue
+			}
+			result = append([]string{token, tokens[i+1]}, result...)
+			continue
+		}
+		if containsArg(result, token) {
+			continue
+		}
+		result = append([]string{token}, result...)
+	}
+	return result
+}
+
+func hasOptionWithValue(args []string, option, value string) bool {
+	for i := 0; i < len(args)-1; i++ {
+		if args[i] == option && args[i+1] == value {
+			return true
+		}
+	}
+	return false
+}
+
+func containsArg(args []string, target string) bool {
+	for _, arg := range args {
+		if arg == target {
+			return true
+		}
+	}
+	return false
 }
 
 func runOneShot(ctx context.Context, req RunRequest, spec ExecSpec, onChunk func(string)) (RunResult, error) {
@@ -457,9 +603,15 @@ func injectLastMessagePath(args []string, path string) []string {
 }
 
 var ansiPattern = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]`)
+var oscPattern = regexp.MustCompile(`\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)`)
+var singleEscapePattern = regexp.MustCompile(`\x1b[@-_]`)
+var otherControlPattern = regexp.MustCompile(`[\x00-\x08\x0b-\x1f\x7f]`)
 
 func sanitizeOutput(text string) string {
+	text = oscPattern.ReplaceAllString(text, "")
 	text = ansiPattern.ReplaceAllString(text, "")
+	text = singleEscapePattern.ReplaceAllString(text, "")
+	text = otherControlPattern.ReplaceAllString(text, "")
 	text = strings.ReplaceAll(text, "\r", "")
 	return strings.TrimSpace(text)
 }

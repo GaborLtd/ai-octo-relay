@@ -4,6 +4,7 @@
   "store_path": "data/state.json",
   "log_level": "info",
   "quiet_by_default": true,
+  "dm_read_only": true,
   "slack": {
     "app_token": "",
     "bot_token": ""
@@ -19,6 +20,7 @@
   "agents": {
     "codex": {
       "adapter": "codex",
+      "aliases": ["o3", "openai"],
       "command": "codex",
       "mode": "oneshot",
       "transport": "stdio",
@@ -42,6 +44,7 @@
     },
     "claude": {
       "adapter": "claude",
+      "aliases": ["sonnet"],
       "command": "claude",
       "mode": "oneshot",
       "transport": "stdio",
@@ -62,6 +65,7 @@
     },
     "gemini": {
       "adapter": "gemini",
+      "aliases": ["flash"],
       "command": "gemini",
       "mode": "oneshot",
       "transport": "stdio",

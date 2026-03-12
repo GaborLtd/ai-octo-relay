@@ -62,10 +62,49 @@ func (s *Service) HelpText() string {
 		"",
 		"非指令訊息會送到目前選擇的 project + agent 執行。",
 		"同一個 thread 會優先沿用各 CLI 自己的 session/resume 能力。",
+		"也可在訊息開頭用 #agent 指定，例如：#gemini 幫我看這個錯誤。",
 	}, "\n")
 }
 
 func (s *Service) ResolveScope(channelID, threadTS string) (Scope, error) {
+	return s.resolveScope(channelID, threadTS, "")
+}
+
+func (s *Service) ResolvePromptScope(channelID, threadTS, agentOverride string) (Scope, error) {
+	return s.resolveScope(channelID, threadTS, agentOverride)
+}
+
+func (s *Service) ValidateAgentLock(channelID, threadTS, agentOverride string) error {
+	if agentOverride == "" {
+		return nil
+	}
+	scope, err := s.ResolveScope(channelID, threadTS)
+	if err != nil {
+		return err
+	}
+	if scope.AgentName == "" {
+		return nil
+	}
+	if scope.AgentName == agentOverride {
+		return nil
+	}
+
+	if threadTS != "" {
+		threadState := s.store.GetThread(scope.ThreadKey)
+		if threadState.SessionActive {
+			return fmt.Errorf("這個 thread 已綁定 agent %s；若要改用 %s，請開新 thread", scope.AgentName, agentOverride)
+		}
+		return nil
+	}
+
+	channelState := s.store.GetChannel(channelID)
+	if channelState.SessionActive {
+		return fmt.Errorf("這個 DM session 已綁定 agent %s；若要改用 %s，請先 %ssession restart 或開新對話", scope.AgentName, agentOverride, s.cfg.CommandPrefix)
+	}
+	return nil
+}
+
+func (s *Service) resolveScope(channelID, threadTS, agentOverride string) (Scope, error) {
 	channelState := s.store.GetChannel(channelID)
 	scope := Scope{
 		ProjectName: channelState.Project,
@@ -108,6 +147,10 @@ func (s *Service) ResolveScope(channelID, threadTS string) (Scope, error) {
 		return Scope{}, fmt.Errorf("unknown project in state: %s", scope.ProjectName)
 	}
 
+	if agentOverride != "" {
+		scope.AgentName = agentOverride
+	}
+
 	if scope.AgentName == "" {
 		switch {
 		case projectCfg.DefaultAgent != "":
@@ -123,9 +166,11 @@ func (s *Service) ResolveScope(channelID, threadTS string) (Scope, error) {
 		}
 	}
 
-	if !s.agents.Has(scope.AgentName) {
+	canonicalAgentName, ok := s.agents.ResolveName(scope.AgentName)
+	if !ok {
 		return Scope{}, fmt.Errorf("unknown agent in state: %s", scope.AgentName)
 	}
+	scope.AgentName = canonicalAgentName
 
 	threadPart := "channel"
 	if threadTS != "" {
@@ -134,6 +179,22 @@ func (s *Service) ResolveScope(channelID, threadTS string) (Scope, error) {
 	scope.SessionKey = fmt.Sprintf("%s:%s:%s:%s", channelID, threadPart, scope.ProjectName, scope.AgentName)
 
 	return scope, nil
+}
+
+func (s *Service) ExtractAgentOverride(text string) (string, string, bool) {
+	fields := strings.Fields(strings.TrimSpace(text))
+	if len(fields) == 0 {
+		return "", "", false
+	}
+	selector := fields[0]
+	if !strings.HasPrefix(selector, "#") {
+		return "", text, false
+	}
+	agentName, ok := s.agents.ResolveName(selector)
+	if !ok {
+		return "", text, false
+	}
+	return agentName, strings.TrimSpace(strings.Join(fields[1:], " ")), true
 }
 
 func (s *Service) StatusText(channelID, threadTS string) (string, error) {
@@ -191,7 +252,12 @@ func (s *Service) AgentListText() string {
 		if mode == "" {
 			mode = agent.ModeOneShot
 		}
-		lines = append(lines, fmt.Sprintf("- %s (%s)", name, mode))
+		line := fmt.Sprintf("- %s (%s)", name, mode)
+		aliases := s.agents.Aliases(name)
+		if len(aliases) > 0 {
+			line += fmt.Sprintf(" aliases: %s", strings.Join(aliases, ", "))
+		}
+		lines = append(lines, line)
 	}
 	return strings.Join(lines, "\n")
 }
@@ -236,7 +302,9 @@ func (s *Service) SetQuiet(channelID, threadTS string, quiet bool) (string, erro
 
 func (s *Service) MarkThreadSessionActive(channelID, threadTS string) error {
 	if threadTS == "" {
-		return nil
+		state := s.store.GetChannel(channelID)
+		state.SessionActive = true
+		return s.store.SetChannel(channelID, state)
 	}
 	threadKey := channelID + ":" + threadTS
 	state := s.store.GetThread(threadKey)
@@ -246,7 +314,8 @@ func (s *Service) MarkThreadSessionActive(channelID, threadTS string) error {
 
 func (s *Service) HasThreadSession(channelID, threadTS string) bool {
 	if threadTS == "" {
-		return false
+		state := s.store.GetChannel(channelID)
+		return state.SessionActive
 	}
 	threadKey := channelID + ":" + threadTS
 	state := s.store.GetThread(threadKey)
@@ -293,7 +362,8 @@ func (s *Service) ClearProject(channelID, threadTS string) (string, error) {
 }
 
 func (s *Service) UseAgent(channelID, threadTS, name string) (string, error) {
-	if !s.agents.Has(name) {
+	canonicalName, ok := s.agents.ResolveName(name)
+	if !ok {
 		return "", fmt.Errorf("agent %q not found", name)
 	}
 	if threadTS != "" {
@@ -303,19 +373,19 @@ func (s *Service) UseAgent(channelID, threadTS, name string) (string, error) {
 		}
 		threadState := s.store.GetThread(scope.ThreadKey)
 		threadState.Project = scope.ProjectName
-		threadState.Agent = name
+		threadState.Agent = canonicalName
 		if err := s.store.SetThread(scope.ThreadKey, threadState); err != nil {
 			return "", err
 		}
-		return "thread agent set to " + name, nil
+		return "thread agent set to " + canonicalName, nil
 	}
 
 	state := s.store.GetChannel(channelID)
-	state.Agent = name
+	state.Agent = canonicalName
 	if err := s.store.SetChannel(channelID, state); err != nil {
 		return "", err
 	}
-	return "channel agent set to " + name, nil
+	return "channel agent set to " + canonicalName, nil
 }
 
 func (s *Service) ClearAgent(channelID, threadTS string) (string, error) {
@@ -368,8 +438,8 @@ func (s *Service) Reset(channelID, threadTS string) (string, error) {
 	return "channel overrides cleared", nil
 }
 
-func (s *Service) RunPrompt(ctx context.Context, channelID, threadTS, slackUserID, prompt string, onChunk func(string)) (string, error) {
-	scope, err := s.ResolveScope(channelID, threadTS)
+func (s *Service) RunPrompt(ctx context.Context, channelID, threadTS, slackUserID, prompt, agentOverride string, isDM bool, onChunk func(string)) (string, error) {
+	scope, err := s.resolveScope(channelID, threadTS, agentOverride)
 	if err != nil {
 		return "", err
 	}
@@ -396,6 +466,8 @@ func (s *Service) RunPrompt(ctx context.Context, channelID, threadTS, slackUserI
 		ProjectName:     scope.ProjectName,
 		ProjectPath:     projectCfg.Path,
 		Prompt:          prompt,
+		PromptSuffix:    s.promptSuffixForContext(isDM),
+		DMReadOnly:      isDM && s.cfg.DMReadOnly,
 		SessionKey:      scope.SessionKey,
 		ThreadTS:        threadTS,
 		ChannelID:       channelID,
@@ -423,6 +495,13 @@ func (s *Service) RunPrompt(ctx context.Context, channelID, threadTS, slackUserI
 		}
 	}
 	return result.Output, err
+}
+
+func (s *Service) promptSuffixForContext(isDM bool) string {
+	if !isDM || !s.cfg.DMReadOnly {
+		return ""
+	}
+	return s.cfg.DMReadOnlyPrompt
 }
 
 func (s *Service) SessionStatusText(channelID, threadTS string) (string, error) {

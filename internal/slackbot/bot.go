@@ -109,7 +109,7 @@ func (b *Bot) handleEventsAPI(ctx context.Context, apiEvent slackevents.EventsAP
 
 func (b *Bot) handleMention(ctx context.Context, ev slackevents.AppMentionEvent) error {
 	b.logger.Infof("slack mention: channel=%s user=%s thread_ts=%s ts=%s", ev.Channel, ev.User, ev.ThreadTimeStamp, ev.TimeStamp)
-	return b.processMessage(ctx, ev.Channel, ev.User, ev.Text, ev.ThreadTimeStamp, ev.TimeStamp, true)
+	return b.processMessage(ctx, ev.Channel, ev.User, ev.Text, ev.ThreadTimeStamp, ev.TimeStamp, true, false)
 }
 
 func (b *Bot) handleMessage(ctx context.Context, ev slackevents.MessageEvent) error {
@@ -118,21 +118,21 @@ func (b *Bot) handleMessage(ctx context.Context, ev slackevents.MessageEvent) er
 	}
 	if ev.ChannelType == "im" {
 		b.logger.Infof("slack dm: channel=%s user=%s thread_ts=%s ts=%s", ev.Channel, ev.User, ev.ThreadTimeStamp, ev.TimeStamp)
-		return b.processMessage(ctx, ev.Channel, ev.User, ev.Text, ev.ThreadTimeStamp, ev.TimeStamp, false)
+		return b.processMessage(ctx, ev.Channel, ev.User, ev.Text, ev.ThreadTimeStamp, ev.TimeStamp, false, true)
 	}
 	if b.isBotMention(ev.Text) {
 		b.logger.Infof("slack channel mention via message event: channel=%s user=%s thread_ts=%s ts=%s", ev.Channel, ev.User, ev.ThreadTimeStamp, ev.TimeStamp)
-		return b.processMessage(ctx, ev.Channel, ev.User, ev.Text, ev.ThreadTimeStamp, ev.TimeStamp, true)
+		return b.processMessage(ctx, ev.Channel, ev.User, ev.Text, ev.ThreadTimeStamp, ev.TimeStamp, true, false)
 	}
 	if ev.ThreadTimeStamp != "" && b.service.HasThreadSession(ev.Channel, ev.ThreadTimeStamp) {
 		b.logger.Infof("slack thread continuation: channel=%s user=%s thread_ts=%s ts=%s", ev.Channel, ev.User, ev.ThreadTimeStamp, ev.TimeStamp)
-		return b.processMessage(ctx, ev.Channel, ev.User, ev.Text, ev.ThreadTimeStamp, ev.TimeStamp, false)
+		return b.processMessage(ctx, ev.Channel, ev.User, ev.Text, ev.ThreadTimeStamp, ev.TimeStamp, false, false)
 	}
 	b.logger.Debugf("ignored non-dm message event: channel=%s channel_type=%s user=%s ts=%s", ev.Channel, ev.ChannelType, ev.User, ev.TimeStamp)
 	return nil
 }
 
-func (b *Bot) processMessage(ctx context.Context, channelID, userID, rawText, threadTS, messageTS string, preferThread bool) error {
+func (b *Bot) processMessage(ctx context.Context, channelID, userID, rawText, threadTS, messageTS string, preferThread bool, isDM bool) error {
 	if !b.isAllowedChannel(channelID) {
 		return b.reply(channelID, threadTS, "這個 channel 不在允許清單。")
 	}
@@ -163,13 +163,24 @@ func (b *Bot) processMessage(ctx context.Context, channelID, userID, rawText, th
 		return b.reply(channelID, commandThreadTS, response)
 	}
 
+	agentOverride, promptText, hasAgentOverride := b.service.ExtractAgentOverride(text)
+	if hasAgentOverride {
+		if promptText == "" {
+			return b.reply(channelID, threadTS, "agent selector 後面缺少 prompt")
+		}
+		text = promptText
+	}
+
 	normalizedThreadTS := normalizeThreadTS(threadTS, messageTS, preferThread)
+	if err := b.service.ValidateAgentLock(channelID, normalizedThreadTS, agentOverride); err != nil {
+		return b.reply(channelID, normalizedThreadTS, err.Error())
+	}
 	if err := b.service.MarkThreadSessionActive(channelID, normalizedThreadTS); err != nil {
 		return fmt.Errorf("mark thread session active: %w", err)
 	}
 	b.logger.Infof("thread decision: channel=%s message_ts=%s incoming_thread_ts=%s prefer_thread=%t resolved_thread_ts=%s", channelID, messageTS, threadTS, preferThread, normalizedThreadTS)
 
-	scope, err := b.service.ResolveScope(channelID, normalizedThreadTS)
+	scope, err := b.service.ResolvePromptScope(channelID, normalizedThreadTS, agentOverride)
 	if err != nil {
 		return fmt.Errorf("resolve scope: %w", err)
 	}
@@ -208,7 +219,7 @@ func (b *Bot) processMessage(ctx context.Context, channelID, userID, rawText, th
 	}
 
 	b.logger.Infof("agent run started: channel=%s user=%s status_ts=%s", channelID, userID, statusTS)
-	output, runErr := b.service.RunPrompt(ctx, channelID, normalizedThreadTS, userID, text, onChunk)
+	output, runErr := b.service.RunPrompt(ctx, channelID, normalizedThreadTS, userID, text, agentOverride, isDM, onChunk)
 	if runErr != nil {
 		b.logger.Warnf("agent run failed: channel=%s user=%s status_ts=%s error=%v", channelID, userID, statusTS, runErr)
 	} else {
@@ -418,6 +429,7 @@ var noiseLinePatterns = []*regexp.Regexp{
 
 func cleanFinalResponse(text string) string {
 	lines := strings.Split(strings.ReplaceAll(text, "\r", ""), "\n")
+	lines = rebuildCharacterFragments(lines)
 	out := make([]string, 0, len(lines))
 	seen := map[string]struct{}{}
 	lastBlank := false
@@ -454,6 +466,61 @@ func isNoiseLine(line string) bool {
 		}
 	}
 	return false
+}
+
+func rebuildCharacterFragments(lines []string) []string {
+	out := make([]string, 0, len(lines))
+	var fragment strings.Builder
+	flush := func() {
+		if fragment.Len() == 0 {
+			return
+		}
+		text := strings.TrimSpace(fragment.String())
+		if text != "" {
+			out = append(out, text)
+		}
+		fragment.Reset()
+	}
+
+	for _, raw := range lines {
+		line := strings.TrimSpace(raw)
+		if line == "" {
+			flush()
+			out = append(out, "")
+			continue
+		}
+		if isSingleCharacterFragment(line) {
+			fragment.WriteString(line)
+			continue
+		}
+		flush()
+		out = append(out, line)
+	}
+	flush()
+	return out
+}
+
+func isSingleCharacterFragment(line string) bool {
+	runes := []rune(line)
+	if len(runes) != 1 {
+		return false
+	}
+	r := runes[0]
+	if r >= 'A' && r <= 'Z' {
+		return true
+	}
+	if r >= 'a' && r <= 'z' {
+		return true
+	}
+	if r >= '0' && r <= '9' {
+		return true
+	}
+	switch r {
+	case '.', ',', ':', ';', '!', '?', '\'', '"', '-', '_', '/', '\\', '(', ')':
+		return true
+	default:
+		return false
+	}
 }
 
 func formatSlackReply(text string) string {
