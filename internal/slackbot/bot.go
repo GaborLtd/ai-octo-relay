@@ -114,6 +114,7 @@ func (b *Bot) handleMention(ctx context.Context, ev slackevents.AppMentionEvent)
 
 func (b *Bot) handleMessage(ctx context.Context, ev slackevents.MessageEvent) error {
 	if ev.BotID != "" || ev.SubType != "" {
+		b.logger.Infof("ignored message event: channel=%s user=%s bot_id=%s subtype=%s thread_ts=%s ts=%s", ev.Channel, ev.User, ev.BotID, ev.SubType, ev.ThreadTimeStamp, ev.TimeStamp)
 		return nil
 	}
 	if ev.ChannelType == "im" {
@@ -128,7 +129,7 @@ func (b *Bot) handleMessage(ctx context.Context, ev slackevents.MessageEvent) er
 		b.logger.Infof("slack thread continuation: channel=%s user=%s thread_ts=%s ts=%s", ev.Channel, ev.User, ev.ThreadTimeStamp, ev.TimeStamp)
 		return b.processMessage(ctx, ev.Channel, ev.User, ev.Text, ev.ThreadTimeStamp, ev.TimeStamp, false, false)
 	}
-	b.logger.Debugf("ignored non-dm message event: channel=%s channel_type=%s user=%s ts=%s", ev.Channel, ev.ChannelType, ev.User, ev.TimeStamp)
+	b.logger.Infof("ignored message event: channel=%s channel_type=%s user=%s thread_ts=%s ts=%s reason=no_mention_or_active_thread", ev.Channel, ev.ChannelType, ev.User, ev.ThreadTimeStamp, ev.TimeStamp)
 	return nil
 }
 
@@ -186,6 +187,15 @@ func (b *Bot) processMessage(ctx context.Context, channelID, userID, rawText, th
 	}
 	b.logger.Infof("resolved scope: channel=%s agent=%s project=%s quiet=%t", channelID, scope.AgentName, scope.ProjectName, scope.Quiet)
 	b.logger.Infof("resolved session: channel=%s session_key=%s is_thread=%t thread_key=%s", channelID, scope.SessionKey, scope.IsThread, scope.ThreadKey)
+	b.logger.Infof(
+		"prompt dispatch: channel=%s user=%s agent=%s project=%s thread_ts=%s prompt=%q",
+		channelID,
+		userID,
+		scope.AgentName,
+		scope.ProjectName,
+		normalizedThreadTS,
+		truncateForLog(text, 100),
+	)
 
 	_, statusTS, err := b.client.PostMessage(
 		channelID,
@@ -218,7 +228,7 @@ func (b *Bot) processMessage(ctx context.Context, channelID, userID, rawText, th
 		}
 	}
 
-	b.logger.Infof("agent run started: channel=%s user=%s status_ts=%s", channelID, userID, statusTS)
+	b.logger.Infof("agent run started: channel=%s user=%s agent=%s project=%s status_ts=%s", channelID, userID, scope.AgentName, scope.ProjectName, statusTS)
 	output, runErr := b.service.RunPrompt(ctx, channelID, normalizedThreadTS, userID, text, agentOverride, isDM, onChunk)
 	if runErr != nil {
 		b.logger.Warnf("agent run failed: channel=%s user=%s status_ts=%s error=%v", channelID, userID, statusTS, runErr)

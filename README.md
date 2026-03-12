@@ -457,6 +457,11 @@ Gemini 額外建議：
 
 這會限制 Gemini CLI 在單次 one-shot 內的 tool / agent 迴圈次數，避免長時間卡住不回。
 
+另外目前對 Gemini 有一層保護：
+
+- 若沿用的 native session 已達 CLI 的 max session turns
+- 系統會自動清掉該 thread 的 Gemini session id，並以新 session 重試一次
+
 如果 `claude` 不在 PATH，請直接把 `command` 改成完整路徑。
 
 ## 驗證

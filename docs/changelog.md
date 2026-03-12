@@ -88,6 +88,12 @@
 - 只開放有限子集合與有限參數
 - `pull` 固定為 `--ff-only`
 
+### Gemini session exhaustion fallback
+
+- 若 Gemini native session 命中 CLI 的 max session turns
+- 系統會自動清掉舊的 native session id
+- 並以新 session 重試一次，減少手動 `!session restart` 的需要
+
 ### DM read-only 延伸到命令
 
 - 若 `dm_read_only = true`

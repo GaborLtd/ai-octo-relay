@@ -627,6 +627,13 @@ func (s *Service) RunPrompt(ctx context.Context, channelID, threadTS, slackUserI
 	}
 
 	result, err := s.agents.Run(ctx, req, onChunk)
+	if shouldRetryWithFreshNativeSession(scope.AgentName, nativeSessionID, err, result.Output) {
+		if clearErr := s.store.ClearSession(scope.SessionKey); clearErr != nil {
+			return result.Output, clearErr
+		}
+		req.NativeSessionID = ""
+		result, err = s.agents.Run(ctx, req, onChunk)
+	}
 	if result.NativeSessionID != "" && result.NativeSessionID != nativeSession.NativeID {
 		if saveErr := s.store.SetSession(scope.SessionKey, store.NativeSessionState{
 			Agent:     scope.AgentName,
@@ -640,6 +647,24 @@ func (s *Service) RunPrompt(ctx context.Context, channelID, threadTS, slackUserI
 		}
 	}
 	return result.Output, err
+}
+
+func shouldRetryWithFreshNativeSession(agentName, nativeSessionID string, runErr error, output string) bool {
+	if nativeSessionID == "" || runErr == nil {
+		return false
+	}
+	text := strings.ToLower(output)
+	if runErr != nil {
+		text += "\n" + strings.ToLower(runErr.Error())
+	}
+	switch agentName {
+	case "gemini":
+		return strings.Contains(text, "fatalturnlimitederror") ||
+			strings.Contains(text, "reached max session turns") ||
+			strings.Contains(text, `"code": 53`)
+	default:
+		return false
+	}
 }
 
 func (s *Service) promptSuffixForContext(isDM bool) string {
