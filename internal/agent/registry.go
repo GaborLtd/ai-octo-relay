@@ -83,6 +83,7 @@ type ExecSpec struct {
 	SessionIdleTimeout time.Duration
 	StartupWait        time.Duration
 	OutputParser       string
+	MaxSessionTurns    int
 }
 
 type Adapter interface {
@@ -228,6 +229,7 @@ func registerAgentAlias(aliases map[string]string, alias, canonicalName string) 
 func normalizeAgentSelector(value string) string {
 	normalized := strings.TrimSpace(strings.ToLower(value))
 	normalized = strings.TrimLeft(normalized, "@")
+	normalized = strings.TrimLeft(normalized, "#")
 	normalized = strings.TrimSuffix(normalized, ":")
 	normalized = strings.TrimSpace(normalized)
 	return normalized
@@ -360,6 +362,7 @@ func finalizeSpec(req RunRequest, cfg config.AgentConfig, oneshotCommand string,
 		SessionIdleTimeout: durationMillisWithDefault(cfg.SessionIdleMS, 900000*time.Millisecond),
 		StartupWait:        durationMillisWithDefault(cfg.StartupWaitMS, 1200*time.Millisecond),
 		OutputParser:       inferOutputParser(req.AgentName, mode),
+		MaxSessionTurns:    cfg.MaxSessionTurns,
 	}
 }
 
@@ -457,6 +460,21 @@ func runOneShot(ctx context.Context, req RunRequest, spec ExecSpec, onChunk func
 		_ = tempFile.Close()
 		defer os.Remove(req.LastMessagePath)
 		spec.Args = injectLastMessagePath(spec.Args, req.LastMessagePath)
+	}
+	if spec.OutputParser == "gemini-json" && spec.MaxSessionTurns > 0 {
+		tempFile, err := os.CreateTemp("", "ai-octo-relay-gemini-settings-*.json")
+		if err != nil {
+			return RunResult{}, fmt.Errorf("create gemini settings temp file: %w", err)
+		}
+		settingsContent := fmt.Sprintf("{\"model\":{\"maxSessionTurns\":%d}}", spec.MaxSessionTurns)
+		if err := os.WriteFile(tempFile.Name(), []byte(settingsContent), 0o600); err != nil {
+			_ = tempFile.Close()
+			_ = os.Remove(tempFile.Name())
+			return RunResult{}, fmt.Errorf("write gemini settings temp file: %w", err)
+		}
+		_ = tempFile.Close()
+		defer os.Remove(tempFile.Name())
+		spec.Env["GEMINI_CLI_SYSTEM_SETTINGS_PATH"] = tempFile.Name()
 	}
 	// one-shot execution path
 

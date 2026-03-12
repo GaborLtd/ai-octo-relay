@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
@@ -52,6 +54,9 @@ func (s *Service) HelpText() string {
 		s.cfg.CommandPrefix + "agent list",
 		s.cfg.CommandPrefix + "agent use <name>",
 		s.cfg.CommandPrefix + "agent clear",
+		s.cfg.CommandPrefix + "cmd list",
+		s.cfg.CommandPrefix + "cmd run <name>",
+		s.cfg.CommandPrefix + "git status|diff|log|branch|show|fetch|pull",
 		s.cfg.CommandPrefix + "session status",
 		s.cfg.CommandPrefix + "session restart",
 		s.cfg.CommandPrefix + "session close",
@@ -243,6 +248,154 @@ func (s *Service) ProjectCurrentText(channelID, threadTS string) (string, error)
 		}
 	}
 	return fmt.Sprintf("project: %s\npath: %s\nsource: %s", scope.ProjectName, projectCfg.Path, source), nil
+}
+
+func (s *Service) ProjectCommandListText(channelID, threadTS string) (string, error) {
+	scope, err := s.ResolveScope(channelID, threadTS)
+	if err != nil {
+		return "", err
+	}
+	projectCfg, ok := s.projects.Get(scope.ProjectName)
+	if !ok {
+		return "", fmt.Errorf("project %q not found", scope.ProjectName)
+	}
+	if len(projectCfg.CommandNames) == 0 {
+		return "no project commands configured", nil
+	}
+	lines := make([]string, 0, len(projectCfg.CommandNames))
+	for _, name := range projectCfg.CommandNames {
+		command := projectCfg.Commands[name]
+		line := fmt.Sprintf("- %s => %s %s", command.Name, command.Command, strings.Join(command.Args, " "))
+		line = strings.TrimSpace(line)
+		if strings.TrimSpace(command.Description) != "" {
+			line += fmt.Sprintf(" | %s", command.Description)
+		}
+		lines = append(lines, line)
+	}
+	return strings.Join(lines, "\n"), nil
+}
+
+func (s *Service) RunProjectCommand(ctx context.Context, channelID, threadTS, name string) (string, error) {
+	scope, err := s.ResolveScope(channelID, threadTS)
+	if err != nil {
+		return "", err
+	}
+	projectCfg, ok := s.projects.Get(scope.ProjectName)
+	if !ok {
+		return "", fmt.Errorf("project %q not found", scope.ProjectName)
+	}
+	command, ok := projectCfg.Commands[name]
+	if !ok {
+		return "", fmt.Errorf("project command %q not found", name)
+	}
+	return s.runCommand(ctx, projectCfg.Path, command.Command, command.Args...)
+}
+
+func (s *Service) RunGitCommand(ctx context.Context, channelID, threadTS string, args []string) (string, error) {
+	scope, err := s.ResolveScope(channelID, threadTS)
+	if err != nil {
+		return "", err
+	}
+	projectCfg, ok := s.projects.Get(scope.ProjectName)
+	if !ok {
+		return "", fmt.Errorf("project %q not found", scope.ProjectName)
+	}
+	if len(args) == 0 {
+		return "", fmt.Errorf("missing git subcommand")
+	}
+	cmdArgs, err := validateGitArgs(args)
+	if err != nil {
+		return "", err
+	}
+	return s.runCommand(ctx, projectCfg.Path, "git", cmdArgs...)
+}
+
+func (s *Service) ValidateDMCommandAccess(command string, args []string) error {
+	if !s.cfg.DMReadOnly {
+		return nil
+	}
+	switch command {
+	case "cmd":
+		if len(args) > 0 && args[0] == "run" {
+			return fmt.Errorf("dm_read_only 已開啟；DM 中不可執行 !cmd run")
+		}
+	case "git":
+		if len(args) == 0 {
+			return nil
+		}
+		switch args[0] {
+		case "fetch", "pull":
+			return fmt.Errorf("dm_read_only 已開啟；DM 中不可執行 !git %s", args[0])
+		}
+	}
+	return nil
+}
+
+func (s *Service) runCommand(ctx context.Context, dir, command string, args ...string) (string, error) {
+	runCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(runCtx, command, args...)
+	cmd.Dir = dir
+	output, err := cmd.CombinedOutput()
+	text := strings.TrimSpace(string(output))
+	if text == "" && err == nil {
+		text = "(no output)"
+	}
+	if runCtx.Err() == context.DeadlineExceeded {
+		if text == "" {
+			return "", fmt.Errorf("command timed out after 120s")
+		}
+		return text, fmt.Errorf("command timed out after 120s")
+	}
+	if err != nil {
+		if text == "" {
+			return "", fmt.Errorf("command failed: %w", err)
+		}
+		return text, fmt.Errorf("command failed: %w", err)
+	}
+	return text, nil
+}
+
+func validateGitArgs(args []string) ([]string, error) {
+	switch args[0] {
+	case "status":
+		return []string{"status", "--short", "--branch"}, nil
+	case "diff":
+		out := []string{"diff"}
+		for _, arg := range args[1:] {
+			switch arg {
+			case "--staged", "--stat", "--cached":
+				out = append(out, arg)
+			default:
+				return nil, fmt.Errorf("unsupported git diff option: %s", arg)
+			}
+		}
+		return out, nil
+	case "log":
+		out := []string{"log", "--oneline", "--decorate", "-n", "20"}
+		if len(args) > 1 {
+			n, err := strconv.Atoi(args[1])
+			if err != nil || n <= 0 || n > 100 {
+				return nil, fmt.Errorf("git log count must be 1-100")
+			}
+			out = []string{"log", "--oneline", "--decorate", "-n", strconv.Itoa(n)}
+		}
+		return out, nil
+	case "branch":
+		return []string{"branch", "--all", "--verbose"}, nil
+	case "show":
+		if len(args) < 2 {
+			return nil, fmt.Errorf("git show requires a revision")
+		}
+		return []string{"show", "--stat", "--summary", args[1]}, nil
+	case "fetch":
+		return []string{"fetch", "--all", "--prune"}, nil
+	case "pull":
+		return []string{"pull", "--ff-only"}, nil
+	default:
+		return nil, fmt.Errorf("unsupported git subcommand: %s", args[0])
+	}
 }
 
 func (s *Service) AgentListText() string {

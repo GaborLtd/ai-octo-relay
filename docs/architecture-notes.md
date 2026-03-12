@@ -258,6 +258,52 @@ Slack 只支援有限的 markdown / mrkdwn。
 - `warn`
 - `error`
 
+## 11. Remote Command 模型
+
+為了支援從 Slack 遠端做開發輔助，目前額外提供兩條能力：
+
+- `!cmd`
+- `!git`
+
+### `!cmd`
+
+`!cmd` 不是任意 shell。
+
+它只會執行：
+
+- `projects[].commands` 中預先定義的白名單 command
+
+理由：
+
+- 使用者需要遠端執行固定的開發動作
+- 但不應直接把 bot 變成可任意執行 shell 的入口
+
+### `!git`
+
+`!git` 也不是完整 git wrapper。
+
+目前只開放有限子集合：
+
+- `status`
+- `diff`
+- `log`
+- `branch`
+- `show`
+- `fetch`
+- `pull`
+
+並且限制可接受的參數，避免變成任意命令轉發。
+
+### DM read-only 與 command
+
+若 `dm_read_only = true`：
+
+- DM 中不允許 `!cmd run`
+- DM 中不允許 `!git fetch`
+- DM 中不允許 `!git pull`
+
+這是刻意設計，避免使用者在 DM 中誤觸會改變專案狀態的操作。
+
 ### 使用原則
 
 - `info`: 日常運行可觀測性

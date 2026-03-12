@@ -14,7 +14,21 @@
       "name": "your-project",
       "path": "/path/to/your-project",
       "default_agent": "codex",
-      "channel_ids": []
+      "channel_ids": [],
+      "commands": [
+        {
+          "name": "dev",
+          "description": "start local dev server",
+          "command": "make",
+          "args": ["dev"]
+        },
+        {
+          "name": "test",
+          "description": "run project tests",
+          "command": "make",
+          "args": ["test"]
+        }
+      ]
     }
   ],
   "agents": {
@@ -76,6 +90,7 @@
         "{{prompt}}"
       ],
       "env": {},
+      "max_session_turns": 8,
       "timeout_seconds": 1800,
       "response_idle_ms": 1800,
       "first_chunk_timeout_ms": 30000,

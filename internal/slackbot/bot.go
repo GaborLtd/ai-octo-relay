@@ -154,7 +154,7 @@ func (b *Bot) processMessage(ctx context.Context, channelID, userID, rawText, th
 	if strings.HasPrefix(text, b.cfg.CommandPrefix) {
 		commandThreadTS := threadTS
 		b.logger.Infof("command received: channel=%s user=%s command=%q", channelID, userID, truncateForLog(text, 200))
-		response, err := b.handleCommand(ctx, channelID, userID, commandThreadTS, text)
+		response, err := b.handleCommand(ctx, channelID, userID, commandThreadTS, text, isDM)
 		if err != nil {
 			b.logger.Warnf("command failed: channel=%s user=%s error=%v", channelID, userID, err)
 			return b.reply(channelID, commandThreadTS, "command error: "+err.Error())
@@ -247,10 +247,15 @@ func (b *Bot) processMessage(ctx context.Context, channelID, userID, rawText, th
 	return nil
 }
 
-func (b *Bot) handleCommand(ctx context.Context, channelID, userID, threadTS, text string) (string, error) {
+func (b *Bot) handleCommand(ctx context.Context, channelID, userID, threadTS, text string, isDM bool) (string, error) {
 	fields := strings.Fields(strings.TrimPrefix(text, b.cfg.CommandPrefix))
 	if len(fields) == 0 {
 		return b.service.HelpText(), nil
+	}
+	if isDM {
+		if err := b.service.ValidateDMCommandAccess(fields[0], fields[1:]); err != nil {
+			return "", err
+		}
 	}
 
 	switch fields[0] {
@@ -258,6 +263,10 @@ func (b *Bot) handleCommand(ctx context.Context, channelID, userID, threadTS, te
 		return b.service.HelpText(), nil
 	case "status":
 		return b.service.StatusText(channelID, threadTS)
+	case "cmd":
+		return b.handleProjectCmd(ctx, channelID, threadTS, fields[1:])
+	case "git":
+		return b.service.RunGitCommand(ctx, channelID, threadTS, fields[1:])
 	case "session":
 		return b.handleSessionCommand(ctx, channelID, userID, threadTS, fields[1:])
 	case "quiet":
@@ -270,6 +279,23 @@ func (b *Bot) handleCommand(ctx context.Context, channelID, userID, threadTS, te
 		return b.handleAgentCommand(channelID, threadTS, fields[1:])
 	default:
 		return "", fmt.Errorf("unknown command: %s", fields[0])
+	}
+}
+
+func (b *Bot) handleProjectCmd(ctx context.Context, channelID, threadTS string, args []string) (string, error) {
+	if len(args) == 0 {
+		return "", fmt.Errorf("missing cmd subcommand")
+	}
+	switch args[0] {
+	case "list":
+		return b.service.ProjectCommandListText(channelID, threadTS)
+	case "run":
+		if len(args) < 2 {
+			return "", fmt.Errorf("missing command name")
+		}
+		return b.service.RunProjectCommand(ctx, channelID, threadTS, args[1])
+	default:
+		return "", fmt.Errorf("unknown cmd subcommand: %s", args[0])
 	}
 }
 

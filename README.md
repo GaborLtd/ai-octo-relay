@@ -59,6 +59,15 @@
 !agent list
 !agent use <name>
 !agent clear
+!cmd list
+!cmd run <name>
+!git status
+!git diff [--stat|--staged|--cached]
+!git log [count]
+!git branch
+!git show <rev>
+!git fetch
+!git pull
 !session status
 !session restart
 !session close
@@ -77,6 +86,67 @@
 - 同一個 `thread + project + agent` 會優先沿用該 CLI 的原生 session/resume 能力
 - 若訊息第一個 token 是 `#agent` 或 `#alias`，只會在新 thread / 新 DM session 建立時決定 agent
 - thread 或 DM session 一旦建立，就不能在同一 session 內切換 agent
+- `#agent` selector 只用來選 agent，不會當成 prompt 內容送進 CLI
+
+## Remote Commands
+
+目前支援兩種遠端命令能力：
+
+- `!cmd`
+  - 只能執行 `projects[].commands` 內預先定義好的白名單 command
+- `!git`
+  - 只開放一小組常用 git 子命令，不支援任意 git 參數
+
+### `!cmd`
+
+先列出目前 project 可用的 command：
+
+```text
+!cmd list
+```
+
+執行指定 command：
+
+```text
+!cmd run dev
+!cmd run test
+```
+
+設計原則：
+
+- 不提供任意 shell
+- 只執行 config 中明確定義的 command
+- command 會在目前 project 路徑下執行
+
+### `!git`
+
+目前只支援這些子命令：
+
+```text
+!git status
+!git diff
+!git diff --stat
+!git diff --staged
+!git log
+!git log 10
+!git branch
+!git show HEAD~1
+!git fetch
+!git pull
+```
+
+限制：
+
+- `diff` 只允許 `--stat`、`--staged`、`--cached`
+- `log` 只接受 1-100 的筆數
+- `pull` 固定使用 `--ff-only`
+- 不支援任意 `git` 參數，避免變成遠端 shell
+
+安全性：
+
+- `!cmd run` 可能真的修改專案狀態
+- `!git fetch`、`!git pull` 也會改變本機 git 狀態
+- 若 `dm_read_only = true`，DM 中會拒絕 `!cmd run`、`!git fetch`、`!git pull`
 
 ## 設定
 
@@ -189,6 +259,12 @@ slack-manifest.yaml
 - `path`: 專案實際路徑
 - `default_agent`: 這個 project 的預設 agent
 - `channel_ids`: 綁定這個 project 的 Slack channel IDs
+- `commands`: 可遠端執行的白名單 command
+
+限制：
+
+- 同一個 `channel_id` 只能出現在一個 project 裡
+- 如果重覆，config 驗證會直接失敗
 
 建議用 `channel_ids` 直接把 channel 綁到 project，例如：
 
@@ -202,6 +278,31 @@ slack-manifest.yaml
 ```
 
 這樣你在 `C1234567890` 那個 channel 問問題時，就會直接使用 `backend-api`。
+
+也可以加上白名單 command：
+
+```json
+{
+  "name": "your-project",
+  "path": "/path/to/your-project",
+  "default_agent": "codex",
+  "channel_ids": [],
+  "commands": [
+    {
+      "name": "dev",
+      "description": "start local dev server",
+      "command": "make",
+      "args": ["dev"]
+    },
+    {
+      "name": "test",
+      "description": "run project tests",
+      "command": "make",
+      "args": ["test"]
+    }
+  ]
+}
+```
 
 ### `slack.allowed_channels` 是否需要
 
@@ -223,6 +324,7 @@ slack-manifest.yaml
 `agents.<name>` 欄位：
 
 - `adapter`: `codex` / `gemini` / `claude` / `generic`
+- `aliases`: agent 別名，例如 `["c", "cc"]`
 - `command`: CLI 指令名稱
 - `aliases`: 可在 Slack 訊息開頭使用的 agent 別名
 - `args`: 單次執行參數
@@ -232,6 +334,7 @@ slack-manifest.yaml
 - `mode`: `oneshot` 或 `persistent`
 - `transport`: `stdio` 或 `pty`
 - `timeout_seconds`
+- `max_session_turns`
 - `response_idle_ms`
 - `first_chunk_timeout_ms`
 - `session_idle_ms`
@@ -249,6 +352,11 @@ placeholder：
 - `{{session_key}}`
 - `{{native_session_id}}`
 - `{{last_message_path}}`
+
+限制：
+
+- `agents` 的 key 與所有 `aliases` 經過正規化後不能重覆
+- 例如 `codex`、`#codex`、`@codex` 會視為同一個 selector
 
 Slack 訊息可直接指定 agent，例如：
 
@@ -338,6 +446,13 @@ Slack 訊息可直接指定 agent，例如：
 - 同一個 thread 的上下文優先靠各 CLI 原生 `resume/session-id` 能力維持
 
 原因是 `codex` / `gemini` 的互動 TUI 在 PTY/session 環境下都曾出現終端控制輸出污染或相容性問題。
+
+Gemini 額外建議：
+
+- 設定 `max_session_turns`
+- 例如 `8`
+
+這會限制 Gemini CLI 在單次 one-shot 內的 tool / agent 迴圈次數，避免長時間卡住不回。
 
 如果 `claude` 不在 PATH，請直接把 `command` 改成完整路徑。
 

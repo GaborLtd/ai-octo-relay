@@ -161,3 +161,23 @@ Slack 不一定會對 channel mention 給 `app_mention`。
 公開樣板只使用：
 
 - `config.example.json`
+
+## 10. Remote Command 規則
+
+目前允許兩種遠端命令：
+
+- `!cmd`
+- `!git`
+
+維護原則：
+
+- `!cmd` 只能執行 project config 內定義的白名單 command
+- 不要把 `!cmd` 擴成任意 shell
+- `!git` 只保留有限子命令與有限參數
+- 若新增新的 `!git` 子命令，先確認是否會造成高風險或破壞性操作
+
+`dm_read_only = true` 時：
+
+- 應避免在 DM 中執行會改變專案狀態的命令
+- 至少要阻擋 `!cmd run`
+- 至少要阻擋 `!git fetch` 與 `!git pull`

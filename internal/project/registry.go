@@ -12,6 +12,15 @@ type Project struct {
 	Name         string
 	Path         string
 	DefaultAgent string
+	Commands     map[string]Command
+	CommandNames []string
+}
+
+type Command struct {
+	Name        string
+	Description string
+	Command     string
+	Args        []string
 }
 
 type Registry struct {
@@ -32,6 +41,8 @@ func NewRegistry(configs []config.ProjectConfig) (*Registry, error) {
 			Name:         cfg.Name,
 			Path:         cfg.Path,
 			DefaultAgent: cfg.DefaultAgent,
+			Commands:     toCommands(cfg.Commands),
+			CommandNames: toCommandNames(cfg.Commands),
 		}
 		for _, channelID := range cfg.ChannelIDs {
 			if existing, ok := channels[channelID]; ok {
@@ -43,6 +54,31 @@ func NewRegistry(configs []config.ProjectConfig) (*Registry, error) {
 	}
 	sort.Strings(names)
 	return &Registry{projects: projects, names: names, channels: channels}, nil
+}
+
+func toCommands(configs []config.ProjectCommandConfig) map[string]Command {
+	if len(configs) == 0 {
+		return map[string]Command{}
+	}
+	out := make(map[string]Command, len(configs))
+	for _, cfg := range configs {
+		out[cfg.Name] = Command{
+			Name:        cfg.Name,
+			Description: cfg.Description,
+			Command:     cfg.Command,
+			Args:        slices.Clone(cfg.Args),
+		}
+	}
+	return out
+}
+
+func toCommandNames(configs []config.ProjectCommandConfig) []string {
+	names := make([]string, 0, len(configs))
+	for _, cfg := range configs {
+		names = append(names, cfg.Name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 func (r *Registry) Get(name string) (Project, bool) {

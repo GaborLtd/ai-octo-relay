@@ -75,3 +75,22 @@
 
 - 目前仍使用 JSON store
 - 若未來 session/history 資料量變大，優先考慮切 SQLite
+
+### Remote command 白名單
+
+- 新增 `projects[].commands`
+- Slack 可用 `!cmd list` 與 `!cmd run <name>` 執行 project 白名單 command
+- 目標是支援 remote 開發常用操作，但不開放任意 shell
+
+### 基本 git 指令
+
+- 新增 `!git status|diff|log|branch|show|fetch|pull`
+- 只開放有限子集合與有限參數
+- `pull` 固定為 `--ff-only`
+
+### DM read-only 延伸到命令
+
+- 若 `dm_read_only = true`
+- DM 中拒絕 `!cmd run`
+- DM 中拒絕 `!git fetch` / `!git pull`
+- 避免在私人對話中誤觸會改變專案狀態的操作

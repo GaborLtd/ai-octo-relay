@@ -29,10 +29,18 @@ type SlackConfig struct {
 }
 
 type ProjectConfig struct {
-	Name         string   `json:"name"`
-	Path         string   `json:"path"`
-	DefaultAgent string   `json:"default_agent"`
-	ChannelIDs   []string `json:"channel_ids"`
+	Name         string                 `json:"name"`
+	Path         string                 `json:"path"`
+	DefaultAgent string                 `json:"default_agent"`
+	ChannelIDs   []string               `json:"channel_ids"`
+	Commands     []ProjectCommandConfig `json:"commands"`
+}
+
+type ProjectCommandConfig struct {
+	Name        string   `json:"name"`
+	Description string   `json:"description"`
+	Command     string   `json:"command"`
+	Args        []string `json:"args"`
 }
 
 type AgentConfig struct {
@@ -51,6 +59,7 @@ type AgentConfig struct {
 	SessionIdleMS       int               `json:"session_idle_ms"`
 	StartupWaitMS       int               `json:"startup_wait_ms"`
 	PromptSuffix        string            `json:"prompt_suffix"`
+	MaxSessionTurns     int               `json:"max_session_turns"`
 }
 
 func Load(path string) (*Config, error) {
@@ -176,6 +185,8 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("default_agent %q not found in agents", c.DefaultAgent)
 		}
 	}
+	seenChannels := make(map[string]string)
+	seenAgentSelectors := make(map[string]string)
 	for _, p := range c.Projects {
 		if strings.TrimSpace(p.Name) == "" {
 			return errors.New("project name is required")
@@ -186,6 +197,33 @@ func (c *Config) Validate() error {
 		if p.DefaultAgent != "" {
 			if _, ok := c.Agents[p.DefaultAgent]; !ok {
 				return fmt.Errorf("project %q default_agent %q not found", p.Name, p.DefaultAgent)
+			}
+		}
+		for _, channelID := range p.ChannelIDs {
+			channelID = strings.TrimSpace(channelID)
+			if channelID == "" {
+				continue
+			}
+			if existing, ok := seenChannels[channelID]; ok {
+				if existing == p.Name {
+					return fmt.Errorf("project %q has duplicate channel_id %q", p.Name, channelID)
+				}
+				return fmt.Errorf("channel_id %q is assigned to multiple projects: %s, %s", channelID, existing, p.Name)
+			}
+			seenChannels[channelID] = p.Name
+		}
+		seenCommands := make(map[string]struct{})
+		for _, command := range p.Commands {
+			commandName := strings.TrimSpace(command.Name)
+			if commandName == "" {
+				return fmt.Errorf("project %q command name is required", p.Name)
+			}
+			if _, ok := seenCommands[commandName]; ok {
+				return fmt.Errorf("project %q has duplicate command %q", p.Name, commandName)
+			}
+			seenCommands[commandName] = struct{}{}
+			if strings.TrimSpace(command.Command) == "" {
+				return fmt.Errorf("project %q command %q requires command", p.Name, commandName)
 			}
 		}
 	}
@@ -206,6 +244,36 @@ func (c *Config) Validate() error {
 				return fmt.Errorf("agent %q requires command or adapter", name)
 			}
 		}
+		normalizedName := normalizeAgentSelector(name)
+		if normalizedName == "" {
+			return fmt.Errorf("agent %q has an empty normalized selector", name)
+		}
+		if existing, ok := seenAgentSelectors[normalizedName]; ok && existing != name {
+			return fmt.Errorf("agent selector %q is assigned to multiple agents: %s, %s", normalizedName, existing, name)
+		}
+		seenAgentSelectors[normalizedName] = name
+		for _, alias := range agent.Aliases {
+			normalizedAlias := normalizeAgentSelector(alias)
+			if normalizedAlias == "" {
+				return fmt.Errorf("agent %q has an empty alias", name)
+			}
+			if existing, ok := seenAgentSelectors[normalizedAlias]; ok {
+				if existing == name {
+					return fmt.Errorf("agent %q alias %q duplicates its own selector", name, alias)
+				}
+				return fmt.Errorf("agent alias %q conflicts with agent %s", alias, existing)
+			}
+			seenAgentSelectors[normalizedAlias] = name
+		}
 	}
 	return nil
+}
+
+func normalizeAgentSelector(value string) string {
+	normalized := strings.TrimSpace(strings.ToLower(value))
+	normalized = strings.TrimLeft(normalized, "@")
+	normalized = strings.TrimLeft(normalized, "#")
+	normalized = strings.TrimSuffix(normalized, ":")
+	normalized = strings.TrimSpace(normalized)
+	return normalized
 }
