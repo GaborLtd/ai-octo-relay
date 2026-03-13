@@ -356,6 +356,7 @@ func (a geminiAdapter) Build(req RunRequest, cfg config.AgentConfig) ExecSpec {
 		command,
 		cfg.InteractiveArgs,
 	)
+	spec.MaxSessionTurns = 0
 	return applyGeminiDMReadOnlyPolicy(spec, req)
 }
 
