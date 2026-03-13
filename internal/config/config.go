@@ -66,6 +66,7 @@ type ProjectCommandConfig struct {
 type AgentConfig struct {
 	Adapter             string            `json:"adapter"`
 	Aliases             []string          `json:"aliases"`
+	PromptEngineering   *bool             `json:"prompt_engineering,omitempty"`
 	Model               string            `json:"model"`
 	Command             string            `json:"command"`
 	Args                []string          `json:"args"`
@@ -150,6 +151,10 @@ func applyDefaults(cfg *Config) {
 		cfg.Prompts.Agents = map[string]PromptModeConfig{}
 	}
 	for name, agent := range cfg.Agents {
+		if agent.PromptEngineering == nil {
+			enabled := true
+			agent.PromptEngineering = &enabled
+		}
 		if agent.TimeoutSeconds <= 0 {
 			agent.TimeoutSeconds = 1800
 		}

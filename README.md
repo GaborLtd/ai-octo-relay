@@ -102,6 +102,7 @@ export SLACK_BOT_TOKEN=xoxb-...
 - `prompts.default.dm_read_only`: 直接私訊 bot 時的預設 read-only prompt
 - `prompts.agents.<name>.channel_write`: 針對特定 agent 的 channel / thread 客製 prompt
 - `prompts.agents.<name>.dm_read_only`: 針對特定 agent 的 DM 客製 prompt
+- `agents.<name>.prompt_engineering`: 是否對該 agent 注入 prompt engineering；設為 `false` 時會停用語言提示與 prompt template
 - `channel_write_prompt`: 一般 channel / thread 模式下，提示 agent 優先直接修改 project 檔案，而不是只在 Slack 貼草稿
 - `dm_read_only`: 是否限制 Slack 直接私訊 bot 的 DM（`channel_type = im`）為唯讀；不影響一般 channel / private channel 內的 `@bot` 對話
 - `state_store`: session / scope 狀態儲存

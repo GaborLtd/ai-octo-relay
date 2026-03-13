@@ -143,6 +143,22 @@ func TestPromptSuffixForContextUsesAgentSpecificPrompt(t *testing.T) {
 	}
 }
 
+func TestPromptSuffixForContextCanDisablePromptEngineeringPerAgent(t *testing.T) {
+	svc := newTestService(t)
+	disabled := false
+	svc.cfg.Agents["gemini"] = config.AgentConfig{
+		Adapter:           "gemini",
+		Command:           "gemini",
+		PromptEngineering: &disabled,
+	}
+	svc.cfg.Language = "zh-TW"
+	svc.cfg.Prompts.Default.ChannelWrite = "default-channel"
+
+	if got := svc.promptSuffixForContext("gemini", false); got != "" {
+		t.Fatalf("promptSuffixForContext(gemini, false) = %q, want empty", got)
+	}
+}
+
 func TestBuildGeminiSummaryKeepsGoalAndFiles(t *testing.T) {
 	previous := "Goal: 建立 CONFIG.md 說明設定方式\nLatest request: 幫我整理 config\nStatus: Agent replied in chat; file changes were not clearly confirmed.\nFiles: config.example.json, internal/config/config.go"
 	output := "我已更新 docs/architecture-notes.md，並建議建立 CONFIG.md，請手動貼上。"

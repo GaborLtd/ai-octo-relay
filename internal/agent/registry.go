@@ -325,8 +325,8 @@ func (a genericAdapter) Build(req RunRequest, cfg config.AgentConfig) ExecSpec {
 func (a codexAdapter) Build(req RunRequest, cfg config.AgentConfig) ExecSpec {
 	command := firstNonEmpty(cfg.Command, "codex")
 	oneshotArgs := defaultArgs(cfg.Args, "exec", "--skip-git-repo-check", "--color", "never", "--json", "--output-last-message", "{{last_message_path}}", "-C", "{{project_path}}", "-")
-	if req.NativeSessionID != "" && len(cfg.Args) == 0 {
-		oneshotArgs = []string{"exec", "resume", "{{native_session_id}}", "--skip-git-repo-check", "--json", "--output-last-message", "{{last_message_path}}", "-"}
+	if req.NativeSessionID != "" {
+		oneshotArgs = buildCodexResumeArgs(oneshotArgs)
 	}
 	if strings.TrimSpace(cfg.Model) != "" {
 		oneshotArgs = prependMissingOptions(oneshotArgs, "--model", cfg.Model)
@@ -340,6 +340,21 @@ func (a codexAdapter) Build(req RunRequest, cfg config.AgentConfig) ExecSpec {
 		defaultArgs(cfg.InteractiveArgs, "-C", "{{project_path}}"),
 	)
 	return applyCodexDMReadOnlyPolicy(spec, req)
+}
+
+func buildCodexResumeArgs(args []string) []string {
+	if len(args) == 0 {
+		return []string{"exec", "resume", "{{native_session_id}}"}
+	}
+	out := slices.Clone(args)
+	if strings.TrimSpace(out[0]) == "exec" {
+		if len(out) >= 3 && out[1] == "resume" {
+			out[2] = "{{native_session_id}}"
+			return out
+		}
+		return append([]string{"exec", "resume", "{{native_session_id}}"}, out[1:]...)
+	}
+	return append([]string{"exec", "resume", "{{native_session_id}}"}, out...)
 }
 
 func (a geminiAdapter) Build(req RunRequest, cfg config.AgentConfig) ExecSpec {

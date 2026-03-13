@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -44,6 +45,35 @@ func TestGeminiAdapterUsesPlanModeInDM(t *testing.T) {
 	}
 	if got := spec.Env["SEATBELT_PROFILE"]; got != "strict-open" {
 		t.Fatalf("gemini DM SEATBELT_PROFILE = %q, want %q", got, "strict-open")
+	}
+}
+
+func TestCodexAdapterUsesResumeWithCustomArgs(t *testing.T) {
+	spec := codexAdapter{}.Build(RunRequest{
+		AgentName:       "codex",
+		NativeSessionID: "abc123",
+	}, config.AgentConfig{
+		Command: "codex",
+		Args: []string{
+			"exec",
+			"--skip-git-repo-check",
+			"--color", "never",
+			"--output-last-message", "{{last_message_path}}",
+			"-C", "{{project_path}}",
+			"-",
+		},
+	})
+	wantPrefix := []string{"exec", "resume", "abc123"}
+	if len(spec.Args) < len(wantPrefix) || !slices.Equal(spec.Args[:len(wantPrefix)], wantPrefix) {
+		t.Fatalf("codex resume args prefix = %v, want prefix %v", spec.Args, wantPrefix)
+	}
+}
+
+func TestBuildCodexResumeArgsKeepsExistingResumeShape(t *testing.T) {
+	got := buildCodexResumeArgs([]string{"exec", "resume", "old", "--json"})
+	want := []string{"exec", "resume", "{{native_session_id}}", "--json"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("buildCodexResumeArgs() = %v, want %v", got, want)
 	}
 }
 

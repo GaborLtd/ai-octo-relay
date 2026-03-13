@@ -1008,6 +1008,9 @@ func summarizeAgentFailure(agentName, output string, runErr error) string {
 }
 
 func (s *Service) promptSuffixForContext(agentName string, isDM bool) string {
+	if !s.isPromptEngineeringEnabled(agentName) {
+		return ""
+	}
 	languagePrompt := promptSuffixForLanguage(s.cfg.Language)
 	basePrompt := s.promptTemplateForAgent(agentName, isDM)
 	if isDM {
@@ -1039,6 +1042,14 @@ func (s *Service) promptTemplateForAgent(agentName string, isDM bool) string {
 		return s.cfg.Prompts.Default.ChannelWrite
 	}
 	return s.cfg.ChannelWritePrompt
+}
+
+func (s *Service) isPromptEngineeringEnabled(agentName string) bool {
+	cfg, ok := s.cfg.Agents[agentName]
+	if !ok || cfg.PromptEngineering == nil {
+		return true
+	}
+	return *cfg.PromptEngineering
 }
 
 func promptSuffixForLanguage(language string) string {
