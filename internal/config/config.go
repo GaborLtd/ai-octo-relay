@@ -18,6 +18,7 @@ type Config struct {
 	LogLevel         string                 `json:"log_level"`
 	QuietByDefault   bool                   `json:"quiet_by_default"`
 	DMReadOnly       bool                   `json:"dm_read_only"`
+	ChannelWritePrompt string               `json:"channel_write_prompt"`
 	DMReadOnlyPrompt string                 `json:"dm_read_only_prompt"`
 	Slack            SlackConfig            `json:"slack"`
 	Projects         []ProjectConfig        `json:"projects"`
@@ -121,6 +122,9 @@ func applyDefaults(cfg *Config) {
 	if cfg.LogLevel == "" {
 		cfg.LogLevel = "info"
 	}
+	if cfg.ChannelWritePrompt == "" {
+		cfg.ChannelWritePrompt = defaultChannelWritePrompt
+	}
 	if cfg.DMReadOnlyPrompt == "" {
 		cfg.DMReadOnlyPrompt = defaultDMReadOnlyPrompt
 	}
@@ -149,6 +153,17 @@ func applyDefaults(cfg *Config) {
 		cfg.Agents[name] = agent
 	}
 }
+
+const defaultChannelWritePrompt = `
+
+Channel/project mode is writable.
+
+Rules:
+- If the user asks to create, update, rename, or delete files in the current project, perform the file changes directly in the workspace when the task is feasible.
+- Prefer making the actual project change over only drafting content in chat.
+- After changing files, summarize what changed and mention the main file paths.
+- If a requested change is risky or unclear, say what blocks it before making destructive edits.
+`
 
 const defaultDMReadOnlyPrompt = `
 

@@ -86,6 +86,20 @@ func TestSummarizeAgentFailureForGeminiModelNotFound(t *testing.T) {
 	}
 }
 
+func TestPromptSuffixForContextUsesChannelWritePromptOutsideDM(t *testing.T) {
+	svc := newTestService(t)
+	svc.cfg.DMReadOnly = true
+	svc.cfg.ChannelWritePrompt = "channel-write"
+	svc.cfg.DMReadOnlyPrompt = "dm-readonly"
+
+	if got := svc.promptSuffixForContext(false); got != "channel-write" {
+		t.Fatalf("promptSuffixForContext(false) = %q, want %q", got, "channel-write")
+	}
+	if got := svc.promptSuffixForContext(true); got != "dm-readonly" {
+		t.Fatalf("promptSuffixForContext(true) = %q, want %q", got, "dm-readonly")
+	}
+}
+
 func TestFormatGitBranchOutput(t *testing.T) {
 	input := "  codex-slack-agent-routing        1ba60b3 Add agent-bound Slack sessions and DM read-only mode\n* main                              562c21f [ahead 3] Update docs for session concurrency model\n  remotes/origin/main               50b0c04 Restrict DM to question-only interactions"
 

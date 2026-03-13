@@ -71,7 +71,7 @@
 
 - `!cmd` 只執行 `projects[].commands` 內定義的白名單命令
 - `!git` 只開放固定子命令與少量參數
-- `dm_read_only = true` 時，DM 會拒絕 `!cmd` 與 `!git`
+- `dm_read_only = true` 時，Slack 直接私訊 bot 的 DM（`channel_type = im`）會拒絕 `!cmd` 與 `!git`
 
 ## 設定方式
 
@@ -95,7 +95,8 @@ export SLACK_BOT_TOKEN=xoxb-...
 - `projects[].commands`: `!cmd` 可執行的白名單命令
 - `default_agent`: 全域預設 agent
 - `quiet_by_default`: 是否先用安靜模式回覆
-- `dm_read_only`: 是否限制 DM 為唯讀
+- `channel_write_prompt`: 一般 channel / thread 模式下，提示 agent 優先直接修改 project 檔案，而不是只在 Slack 貼草稿
+- `dm_read_only`: 是否限制 Slack 直接私訊 bot 的 DM（`channel_type = im`）為唯讀；不影響一般 channel / private channel 內的 `@bot` 對話
 - `state_store`: session / scope 狀態儲存
 - `event_store`: event 紀錄儲存，可設為 `none`
 

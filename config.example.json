@@ -13,6 +13,7 @@
   "log_level": "info",
   "quiet_by_default": true,
   "dm_read_only": true,
+  "channel_write_prompt": "\nChannel/project mode is writable.\n\nRules:\n- If the user asks to create, update, rename, or delete files in the current project, perform the file changes directly in the workspace when the task is feasible.\n- Prefer making the actual project change over only drafting content in chat.\n- After changing files, summarize what changed and mention the main file paths.\n- If a requested change is risky or unclear, say what blocks it before making destructive edits.\n",
   "slack": {
     "app_token": "",
     "bot_token": ""
@@ -101,7 +102,6 @@
         "{{prompt}}"
       ],
       "env": {},
-      "max_session_turns": 8,
       "timeout_seconds": 1800,
       "response_idle_ms": 1800,
       "first_chunk_timeout_ms": 30000,

@@ -85,6 +85,7 @@ agent selector 支援：
 - `gemini`
   - `fresh oneshot`
   - 目前不再保存 / 重用 native session
+  - 目前也不再注入 `maxSessionTurns`
   - 原因是先前整合邏輯與實際 CLI 行為不一致，容易誤判成 session 問題
 
 目前內建 agent：
@@ -117,7 +118,9 @@ agent selector 支援：
 
 這些命令都透過 `internal/app/service.go` 驗證與執行。
 
-`dm_read_only = true` 時，DM 會拒絕這兩類命令。
+`dm_read_only = true` 時，只有 Slack 直接私訊 bot 的 DM（`channel_type = im`）會拒絕這兩類命令。
+
+在一般 channel / private channel 中使用 `@bot` 提問，不算 DM。
 
 ## 7. 儲存層
 

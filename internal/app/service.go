@@ -830,10 +830,13 @@ func summarizeAgentFailure(agentName, output string, runErr error) string {
 }
 
 func (s *Service) promptSuffixForContext(isDM bool) string {
-	if !isDM || !s.cfg.DMReadOnly {
-		return ""
+	if isDM {
+		if !s.cfg.DMReadOnly {
+			return ""
+		}
+		return s.cfg.DMReadOnlyPrompt
 	}
-	return s.cfg.DMReadOnlyPrompt
+	return s.cfg.ChannelWritePrompt
 }
 
 func (s *Service) SessionStatusText(channelID, threadTS string) (string, error) {

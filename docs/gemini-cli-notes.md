@@ -4,10 +4,14 @@
 
 Gemini 是目前三家 CLI 中最容易出現 session / model / server capacity 混淆的。
 
+這裡提到的 DM，指的是 Slack 直接私訊 bot 的對話視窗（`channel_type = im`），不是在一般 channel 內用 `@bot` 提問。
+
 ## 建議配置
 
 - `mode = oneshot`
 - 預設 model 建議 `gemini-2.5-flash`
+- 目前視為 `fresh oneshot`
+- 不要再設定 `max_session_turns`
 - 不建議把 Gemini 當最穩定主力 agent
 
 ## 已知坑
@@ -57,23 +61,30 @@ Gemini CLI 會提示：
 
 這通常不是 relay 本身壞掉，而是 server 沒容量或 preview model 太擠。
 
-### 4. session 管理目前不夠可靠
+### 4. session 管理目前改為 fresh oneshot
 
-Gemini 在本專案中目前最需要小心的是 session 邏輯：
+Gemini 在本專案中目前不再走 native session resume，而是固定 fresh oneshot：
 
-- config 若自訂 `args`，native resume 不一定真的生效
-- store 仍可能保存 native session id
-- 錯誤摘要又可能把 CLI 內部錯誤翻成 `max turns`
+- 不保存 / 不重用 Gemini native session
+- `!session restart` 不會幫 Gemini 重接原生 session
+- 同一個新請求就是一次新的 CLI 執行
 
 因此目前實際建議是：
 
-- 不要過度依賴 Gemini native session resume
 - 新問題直接開新 thread
-- 若出現 session / turn 異常，優先 `!session restart`
+- 若出現異常，優先直接重送或改用 `codex:` / `claude:`
 
-### 5. `maxSessionTurns` 不代表一定是 thread 太長
+### 5. `maxSessionTurns` 在本專案已停用
 
-即使是新 thread，也可能在單次請求中因 Gemini CLI 內部流程、重試或工具呼叫打到 turn limit。
+先前即使是新 thread，也可能在單次請求中因 Gemini CLI 內部流程、重試或工具呼叫打到 turn limit。
+
+目前 relay 端已不再替 Gemini 注入 `maxSessionTurns`，所以：
+
+- config 中不要再設定 `agents.gemini.max_session_turns`
+- 若仍看到 `code: 53`
+  - 比較像 Gemini CLI 自身的單次執行問題
+  - 不是 Slack thread 太長
+  - 也不是 relay 還在做 Gemini session resume
 
 所以：
 
