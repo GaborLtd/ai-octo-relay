@@ -320,7 +320,7 @@ func (b *Bot) handleCommand(ctx context.Context, channelID, userID, threadTS, te
 	case "project":
 		return b.handleProjectCommand(channelID, threadTS, fields[1:])
 	case "agent":
-		return b.handleAgentCommand(channelID, threadTS, fields[1:])
+		return b.handleAgentCommand(ctx, channelID, threadTS, fields[1:])
 	default:
 		return "", fmt.Errorf("unknown command: %s", fields[0])
 	}
@@ -394,7 +394,7 @@ func (b *Bot) handleProjectCommand(channelID, threadTS string, args []string) (s
 	}
 }
 
-func (b *Bot) handleAgentCommand(channelID, threadTS string, args []string) (string, error) {
+func (b *Bot) handleAgentCommand(ctx context.Context, channelID, threadTS string, args []string) (string, error) {
 	if len(args) == 0 {
 		return "", fmt.Errorf("missing agent subcommand")
 	}
@@ -405,7 +405,7 @@ func (b *Bot) handleAgentCommand(channelID, threadTS string, args []string) (str
 		if len(args) < 3 || args[1] != "list" {
 			return "", fmt.Errorf("usage: !agent model list <name>")
 		}
-		return b.service.AgentModelListText(args[2])
+		return b.service.AgentModelListText(ctx, args[2])
 	case "use":
 		if len(args) < 2 {
 			return "", fmt.Errorf("missing agent name")

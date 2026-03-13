@@ -7,10 +7,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"slices"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -52,6 +55,11 @@ type SessionInfo struct {
 	ProjectPath  string
 	Interactive  bool
 	ResponseIdle time.Duration
+}
+
+type ModelOption struct {
+	Name string
+	Desc string
 }
 
 type Registry struct {
@@ -168,6 +176,39 @@ func (r *Registry) Aliases(name string) []string {
 		return nil
 	}
 	return slices.Clone(r.defs[canonicalName].config.Aliases)
+}
+
+func (r *Registry) AvailableModels(ctx context.Context, name string) ([]ModelOption, string, error) {
+	canonicalName, def, ok := r.definition(name)
+	if !ok {
+		return nil, "", fmt.Errorf("agent %q not found", name)
+	}
+
+	switch canonicalName {
+	case "codex":
+		if models := fetchOpenAIModels(ctx); len(models) > 0 {
+			return models, "api", nil
+		}
+		if models := readCodexCachedModels(); len(models) > 0 {
+			return models, "cache", nil
+		}
+		return codexFallbackModels(), "fallback", nil
+	case "claude":
+		if models := fetchAnthropicModels(ctx); len(models) > 0 {
+			return models, "api", nil
+		}
+		return claudeFallbackModels(), "fallback", nil
+	case "gemini":
+		if models := fetchGeminiModels(ctx); len(models) > 0 {
+			return models, "api", nil
+		}
+		return geminiFallbackModels(), "fallback", nil
+	default:
+		if strings.TrimSpace(def.config.Model) != "" {
+			return []ModelOption{{Name: def.config.Model, Desc: "configured model"}}, "config", nil
+		}
+		return nil, "none", nil
+	}
 }
 
 func (r *Registry) Run(ctx context.Context, req RunRequest, onChunk func(string)) (RunResult, error) {
@@ -304,9 +345,6 @@ func (a codexAdapter) Build(req RunRequest, cfg config.AgentConfig) ExecSpec {
 func (a geminiAdapter) Build(req RunRequest, cfg config.AgentConfig) ExecSpec {
 	command := firstNonEmpty(cfg.Command, "gemini")
 	oneshotArgs := defaultArgs(cfg.Args, "--output-format", "json", "-p", "{{prompt}}")
-	if req.NativeSessionID != "" && len(cfg.Args) == 0 {
-		oneshotArgs = []string{"--resume", "{{native_session_id}}", "--output-format", "json", "-p", "{{prompt}}"}
-	}
 	if strings.TrimSpace(cfg.Model) != "" && !hasOptionWithValue(oneshotArgs, "-m", cfg.Model) {
 		oneshotArgs = append([]string{"-m", cfg.Model}, oneshotArgs...)
 	}
@@ -790,6 +828,218 @@ func defaultArgs(current []string, fallback ...string) []string {
 		return current
 	}
 	return fallback
+}
+
+func codexFallbackModels() []ModelOption {
+	return []ModelOption{
+		{Name: "gpt-5.2-codex", Desc: "GPT-5.2 Codex"},
+		{Name: "gpt-5-codex", Desc: "GPT-5 Codex"},
+		{Name: "gpt-5.2", Desc: "GPT-5.2"},
+		{Name: "gpt-5", Desc: "GPT-5"},
+		{Name: "gpt-5-mini", Desc: "GPT-5 Mini"},
+		{Name: "gpt-4.1", Desc: "GPT-4.1"},
+	}
+}
+
+func claudeFallbackModels() []ModelOption {
+	return []ModelOption{
+		{Name: "claude-sonnet-4-20250514", Desc: "Claude Sonnet 4"},
+		{Name: "claude-opus-4-20250514", Desc: "Claude Opus 4"},
+		{Name: "claude-3-7-sonnet-20250219", Desc: "Claude 3.7 Sonnet"},
+		{Name: "claude-3-5-haiku-20241022", Desc: "Claude 3.5 Haiku"},
+	}
+}
+
+func geminiFallbackModels() []ModelOption {
+	return []ModelOption{
+		{Name: "gemini-2.5-flash", Desc: "Gemini 2.5 Flash"},
+		{Name: "gemini-2.5-pro", Desc: "Gemini 2.5 Pro"},
+		{Name: "gemini-2.5-flash-lite", Desc: "Gemini 2.5 Flash Lite"},
+		{Name: "gemini-3-flash-preview", Desc: "Gemini 3 Flash Preview"},
+		{Name: "gemini-3-pro-preview", Desc: "Gemini 3 Pro Preview"},
+	}
+}
+
+func fetchOpenAIModels(ctx context.Context) []ModelOption {
+	apiKey := strings.TrimSpace(os.Getenv("OPENAI_API_KEY"))
+	if apiKey == "" {
+		return nil
+	}
+	baseURL := strings.TrimRight(strings.TrimSpace(os.Getenv("OPENAI_BASE_URL")), "/")
+	if baseURL == "" {
+		baseURL = "https://api.openai.com"
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/v1/models", nil)
+	if err != nil {
+		return nil
+	}
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil || resp.StatusCode != http.StatusOK {
+		if resp != nil {
+			resp.Body.Close()
+		}
+		return nil
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil
+	}
+
+	var models []ModelOption
+	for _, m := range result.Data {
+		if strings.Contains(m.ID, "gpt") || strings.Contains(m.ID, "codex") || strings.HasPrefix(m.ID, "o") {
+			models = append(models, ModelOption{Name: m.ID})
+		}
+	}
+	sort.Slice(models, func(i, j int) bool { return models[i].Name < models[j].Name })
+	return dedupeModels(models)
+}
+
+func readCodexCachedModels() []ModelOption {
+	codexHome := strings.TrimSpace(os.Getenv("CODEX_HOME"))
+	if codexHome == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return nil
+		}
+		codexHome = filepath.Join(home, ".codex")
+	}
+	content, err := os.ReadFile(filepath.Join(codexHome, "models_cache.json"))
+	if err != nil {
+		return nil
+	}
+
+	var cached struct {
+		Models []struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		} `json:"models"`
+	}
+	if err := json.Unmarshal(content, &cached); err != nil {
+		return nil
+	}
+	var models []ModelOption
+	for _, m := range cached.Models {
+		name := strings.TrimSpace(firstNonEmpty(m.ID, m.Name))
+		if name != "" {
+			models = append(models, ModelOption{Name: name})
+		}
+	}
+	sort.Slice(models, func(i, j int) bool { return models[i].Name < models[j].Name })
+	return dedupeModels(models)
+}
+
+func fetchAnthropicModels(ctx context.Context) []ModelOption {
+	apiKey := strings.TrimSpace(os.Getenv("ANTHROPIC_API_KEY"))
+	if apiKey == "" {
+		return nil
+	}
+	baseURL := strings.TrimRight(strings.TrimSpace(os.Getenv("ANTHROPIC_BASE_URL")), "/")
+	if baseURL == "" {
+		baseURL = "https://api.anthropic.com"
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/v1/models", nil)
+	if err != nil {
+		return nil
+	}
+	req.Header.Set("x-api-key", apiKey)
+	req.Header.Set("anthropic-version", "2023-06-01")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil || resp.StatusCode != http.StatusOK {
+		if resp != nil {
+			resp.Body.Close()
+		}
+		return nil
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Data []struct {
+			ID          string `json:"id"`
+			DisplayName string `json:"display_name"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil
+	}
+	var models []ModelOption
+	for _, m := range result.Data {
+		if strings.TrimSpace(m.ID) != "" {
+			models = append(models, ModelOption{Name: m.ID, Desc: m.DisplayName})
+		}
+	}
+	sort.Slice(models, func(i, j int) bool { return models[i].Name < models[j].Name })
+	return dedupeModels(models)
+}
+
+func fetchGeminiModels(ctx context.Context) []ModelOption {
+	apiKey := strings.TrimSpace(os.Getenv("GEMINI_API_KEY"))
+	if apiKey == "" {
+		apiKey = strings.TrimSpace(os.Getenv("GOOGLE_API_KEY"))
+	}
+	if apiKey == "" {
+		return nil
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://generativelanguage.googleapis.com/v1beta/models?key="+apiKey, nil)
+	if err != nil {
+		return nil
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil || resp.StatusCode != http.StatusOK {
+		if resp != nil {
+			resp.Body.Close()
+		}
+		return nil
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Models []struct {
+			Name        string `json:"name"`
+			DisplayName string `json:"displayName"`
+		} `json:"models"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil
+	}
+	var models []ModelOption
+	for _, m := range result.Models {
+		id := strings.TrimPrefix(strings.TrimSpace(m.Name), "models/")
+		if strings.HasPrefix(id, "gemini-") {
+			models = append(models, ModelOption{Name: id, Desc: m.DisplayName})
+		}
+	}
+	sort.Slice(models, func(i, j int) bool { return models[i].Name > models[j].Name })
+	return dedupeModels(models)
+}
+
+func dedupeModels(models []ModelOption) []ModelOption {
+	seen := map[string]struct{}{}
+	out := make([]ModelOption, 0, len(models))
+	for _, model := range models {
+		name := strings.TrimSpace(model.Name)
+		if name == "" {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		out = append(out, model)
+	}
+	return out
 }
 
 func durationWithDefault(seconds int, fallback time.Duration) time.Duration {

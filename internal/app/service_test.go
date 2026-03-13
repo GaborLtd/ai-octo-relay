@@ -52,6 +52,40 @@ func TestSummarizeAgentFailureForGeminiCapacity(t *testing.T) {
 	}
 }
 
+func TestAgentModelListTextUsesFallbackModels(t *testing.T) {
+	svc := newTestService(t)
+
+	text, err := svc.AgentModelListText(context.Background(), "gemini")
+	if err != nil {
+		t.Fatalf("AgentModelListText() error = %v", err)
+	}
+	if !strings.Contains(text, "configured_model: (not set)") {
+		t.Fatalf("AgentModelListText() missing configured model: %q", text)
+	}
+	if !strings.Contains(text, "model_source: fallback") {
+		t.Fatalf("AgentModelListText() missing fallback source: %q", text)
+	}
+	if !strings.Contains(text, "gemini-2.5-flash") {
+		t.Fatalf("AgentModelListText() missing fallback model: %q", text)
+	}
+}
+
+func TestUsesNativeSessionForGeminiIsDisabled(t *testing.T) {
+	if usesNativeSession("gemini") {
+		t.Fatal("usesNativeSession(gemini) = true, want false")
+	}
+	if !usesNativeSession("codex") {
+		t.Fatal("usesNativeSession(codex) = false, want true")
+	}
+}
+
+func TestSummarizeAgentFailureForGeminiModelNotFound(t *testing.T) {
+	message := summarizeAgentFailure("gemini", `ModelNotFoundError: Requested entity was not found. "code": 404`, context.DeadlineExceeded)
+	if !strings.Contains(message, "ModelNotFound") {
+		t.Fatalf("summarizeAgentFailure() = %q", message)
+	}
+}
+
 func TestFormatGitBranchOutput(t *testing.T) {
 	input := "  codex-slack-agent-routing        1ba60b3 Add agent-bound Slack sessions and DM read-only mode\n* main                              562c21f [ahead 3] Update docs for session concurrency model\n  remotes/origin/main               50b0c04 Restrict DM to question-only interactions"
 

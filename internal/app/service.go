@@ -466,7 +466,7 @@ func (s *Service) AgentListText() string {
 	return strings.Join(lines, "\n")
 }
 
-func (s *Service) AgentModelListText(name string) (string, error) {
+func (s *Service) AgentModelListText(ctx context.Context, name string) (string, error) {
 	canonicalName, ok := s.agents.ResolveName(name)
 	if !ok {
 		return "", fmt.Errorf("agent %q not found", name)
@@ -482,35 +482,29 @@ func (s *Service) AgentModelListText(name string) (string, error) {
 		currentModel = "(not set)"
 	}
 
-	switch canonicalName {
-	case "codex":
-		return strings.Join([]string{
-			fmt.Sprintf("agent: %s", canonicalName),
-			fmt.Sprintf("configured_model: %s", currentModel),
-			"CLI status: codex 目前沒有穩定的 `list models` 子命令可直接列出你帳號可用 model。",
-			"請改看 OpenAI models 文件，或直接在 config 設 `agents.codex.model`。",
-		}, "\n"), nil
-	case "claude":
-		return strings.Join([]string{
-			fmt.Sprintf("agent: %s", canonicalName),
-			fmt.Sprintf("configured_model: %s", currentModel),
-			"CLI status: claude 目前沒有穩定的 `list models` 子命令可直接列出你帳號可用 model。",
-			"可用 model 仍以 Anthropic 帳號權限與官方 models 文件為準。",
-		}, "\n"), nil
-	case "gemini":
-		return strings.Join([]string{
-			fmt.Sprintf("agent: %s", canonicalName),
-			fmt.Sprintf("configured_model: %s", currentModel),
-			"CLI status: gemini 目前沒有穩定的 `list models` 子命令可直接列出你帳號可用 model。",
-			"建議直接指定 `gemini-2.5-flash`；實際可用性仍受帳號權限與 server capacity 影響。",
-		}, "\n"), nil
-	default:
-		return strings.Join([]string{
-			fmt.Sprintf("agent: %s", canonicalName),
-			fmt.Sprintf("configured_model: %s", currentModel),
-			"這個 agent 目前沒有內建 model list 探測邏輯。",
-		}, "\n"), nil
+	models, source, err := s.agents.AvailableModels(ctx, canonicalName)
+	if err != nil {
+		return "", err
 	}
+
+	lines := []string{
+		fmt.Sprintf("agent: %s", canonicalName),
+		fmt.Sprintf("configured_model: %s", currentModel),
+		fmt.Sprintf("model_source: %s", source),
+	}
+	if len(models) == 0 {
+		lines = append(lines, "no models found")
+		return strings.Join(lines, "\n"), nil
+	}
+	lines = append(lines, "models:")
+	for _, model := range models {
+		if strings.TrimSpace(model.Desc) != "" {
+			lines = append(lines, fmt.Sprintf("- %s | %s", model.Name, model.Desc))
+		} else {
+			lines = append(lines, "- "+model.Name)
+		}
+	}
+	return strings.Join(lines, "\n"), nil
 }
 
 func (s *Service) QuietStatusText(channelID, threadTS string) (string, error) {
@@ -704,7 +698,15 @@ func (s *Service) RunPrompt(ctx context.Context, channelID, threadTS, slackUserI
 	}
 
 	nativeSession := s.store.GetSession(scope.SessionKey)
-	nativeSessionID := nativeSession.NativeID
+	nativeSessionID := ""
+	if usesNativeSession(scope.AgentName) {
+		nativeSessionID = nativeSession.NativeID
+	} else if nativeSession.NativeID != "" {
+		if clearErr := s.store.ClearSession(scope.SessionKey); clearErr != nil {
+			return "", clearErr
+		}
+		nativeSession = store.NativeSessionState{}
+	}
 	if nativeSessionID == "" && scope.AgentName == "claude" {
 		nativeSessionID, err = newSessionUUID()
 		if err != nil {
@@ -743,7 +745,7 @@ func (s *Service) RunPrompt(ctx context.Context, channelID, threadTS, slackUserI
 		req.NativeSessionID = ""
 		result, err = s.agents.Run(ctx, req, onChunk)
 	}
-	if result.NativeSessionID != "" && result.NativeSessionID != nativeSession.NativeID {
+	if usesNativeSession(scope.AgentName) && result.NativeSessionID != "" && result.NativeSessionID != nativeSession.NativeID {
 		if saveErr := s.store.SetSession(scope.SessionKey, store.NativeSessionState{
 			Agent:     scope.AgentName,
 			NativeID:  result.NativeSessionID,
@@ -783,6 +785,15 @@ func shouldRetryWithFreshNativeSession(agentName, nativeSessionID string, runErr
 	}
 }
 
+func usesNativeSession(agentName string) bool {
+	switch agentName {
+	case "gemini":
+		return false
+	default:
+		return true
+	}
+}
+
 func summarizeAgentFailure(agentName, output string, runErr error) string {
 	if runErr == nil {
 		return ""
@@ -795,6 +806,12 @@ func summarizeAgentFailure(agentName, output string, runErr error) string {
 
 	switch agentName {
 	case "gemini":
+		if strings.Contains(text, "modelnotfounderror") ||
+			strings.Contains(text, "requested entity was not found") ||
+			strings.Contains(text, "status 404") ||
+			strings.Contains(text, `"code": 404`) {
+			return "Gemini model 不存在或你的帳號目前不能用這個 model（404 / ModelNotFound）。請檢查 `agents.gemini.model`，或先清空它讓 Gemini CLI 使用預設 model。"
+		}
 		if strings.Contains(text, "model_capacity_exhausted") ||
 			strings.Contains(text, "resource_exhausted") ||
 			strings.Contains(text, "no capacity available for model") ||
@@ -805,7 +822,7 @@ func summarizeAgentFailure(agentName, output string, runErr error) string {
 		if strings.Contains(text, "fatalturnlimitederror") ||
 			strings.Contains(text, "reached max session turns") ||
 			strings.Contains(text, `"code": 53`) {
-			return "Gemini session 已達最大 turns，系統已嘗試自動重置；若仍失敗，請執行 `!session restart`，或改開新 thread / 改用 `codex:`。"
+			return "Gemini CLI 在單次請求內 hit 到 turn limit（code 53）。目前本專案已不使用 Gemini native session resume；若仍持續發生，請縮短 prompt，或改用 `codex:` / `claude:`。"
 		}
 	}
 
@@ -824,18 +841,25 @@ func (s *Service) SessionStatusText(channelID, threadTS string) (string, error) 
 	if err != nil {
 		return "", err
 	}
-	if native := s.store.GetSession(scope.SessionKey); native.NativeID != "" {
-		return fmt.Sprintf(
-			"session: active\nkey: %s\nagent: %s\nmode: native-resume\nnative_session_id: %s\nupdated_at: %s",
-			scope.SessionKey,
-			scope.AgentName,
-			native.NativeID,
-			native.UpdatedAt,
-		), nil
+	if usesNativeSession(scope.AgentName) {
+		if native := s.store.GetSession(scope.SessionKey); native.NativeID != "" {
+			return fmt.Sprintf(
+				"session: active\nkey: %s\nagent: %s\nmode: native-resume\nnative_session_id: %s\nupdated_at: %s",
+				scope.SessionKey,
+				scope.AgentName,
+				native.NativeID,
+				native.UpdatedAt,
+			), nil
+		}
 	}
 	info, ok := s.agents.SessionStatus(scope.SessionKey)
 	if !ok {
-		return fmt.Sprintf("session: inactive\nkey: %s\nagent: %s", scope.SessionKey, scope.AgentName), nil
+		return fmt.Sprintf(
+			"session: inactive\nkey: %s\nagent: %s\nmode: %s",
+			scope.SessionKey,
+			scope.AgentName,
+			sessionModeLabel(scope.AgentName),
+		), nil
 	}
 	return fmt.Sprintf(
 		"session: active\nkey: %s\nagent: %s\nstarted_at: %s\nlast_used_at: %s\ninteractive: %t\nresponse_idle: %s",
@@ -854,11 +878,14 @@ func (s *Service) RestartSession(ctx context.Context, channelID, threadTS, slack
 		return "", err
 	}
 	if s.agents.Mode(scope.AgentName) != agent.ModePersistent {
-		if err := s.store.ClearSession(scope.SessionKey); err != nil {
-			return "", err
+		if usesNativeSession(scope.AgentName) {
+			if err := s.store.ClearSession(scope.SessionKey); err != nil {
+				return "", err
+			}
+			s.appendEvent(scope, channelID, "session.native_cleared", nil)
+			return fmt.Sprintf("native session cleared\nkey: %s\nagent: %s", scope.SessionKey, scope.AgentName), nil
 		}
-		s.appendEvent(scope, channelID, "session.native_cleared", nil)
-		return fmt.Sprintf("native session cleared\nkey: %s\nagent: %s", scope.SessionKey, scope.AgentName), nil
+		return fmt.Sprintf("agent %s uses fresh oneshot mode; no native session to restart", scope.AgentName), nil
 	}
 	projectCfg, ok := s.projects.Get(scope.ProjectName)
 	if !ok {
@@ -886,6 +913,13 @@ func (s *Service) RestartSession(ctx context.Context, channelID, threadTS, slack
 		"interactive": true,
 	})
 	return fmt.Sprintf("session restarted\nkey: %s\nagent: %s", info.Key, info.AgentName), nil
+}
+
+func sessionModeLabel(agentName string) string {
+	if usesNativeSession(agentName) {
+		return "native-resume"
+	}
+	return "fresh-oneshot"
 }
 
 func (s *Service) CloseSession(channelID, threadTS string) (string, error) {
