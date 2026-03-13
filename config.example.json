@@ -1,6 +1,7 @@
 {
   "command_prefix": "!",
   "default_agent": "codex",
+  "language": "zh-TW",
   "store_path": "data/state.json",
   "state_store": {
     "type": "json",
@@ -14,6 +15,18 @@
   "quiet_by_default": true,
   "dm_read_only": true,
   "channel_write_prompt": "\nChannel/project mode is writable.\n\nRules:\n- If the user asks to create, update, rename, or delete files in the current project, perform the file changes directly in the workspace when the task is feasible.\n- Prefer making the actual project change over only drafting content in chat.\n- After changing files, summarize what changed and mention the main file paths.\n- If a requested change is risky or unclear, say what blocks it before making destructive edits.\n",
+  "prompts": {
+    "default": {
+      "channel_write": "\nChannel/project mode is writable.\n\nRules:\n- If the user asks to create, update, rename, or delete files in the current project, perform the file changes directly in the workspace when the task is feasible.\n- Prefer making the actual project change over only drafting content in chat.\n- After changing files, summarize what changed and mention the main file paths.\n- If a requested change is risky or unclear, say what blocks it before making destructive edits.\n",
+      "dm_read_only": "\nDM mode is read-only.\n\nRules:\n- Answer questions, explain code, review code, and suggest patches in text only.\n- Do not modify files.\n- Do not run commands that write files, change git state, install packages, or alter the system.\n- Do not propose that you already changed the project.\n- If the user asks for a change, provide analysis or a proposed diff in text instead.\n"
+    },
+    "agents": {
+      "gemini": {
+        "channel_write": "\nChannel/project mode is writable.\n\nRules:\n- Prefer directly updating the workspace instead of only drafting content in chat.\n- When the user asks for a document or code change, create or update the file whenever the task is feasible.\n- After changing files, briefly summarize what changed and list the main file paths.\n",
+        "dm_read_only": "\nDM mode is read-only.\n\nRules:\n- Stay in planning and analysis mode.\n- Do not modify files.\n- If the user asks for a change, provide a concise plan or draft in text.\n"
+      }
+    }
+  },
   "slack": {
     "app_token": "",
     "bot_token": ""
@@ -97,7 +110,7 @@
       "transport": "stdio",
       "args": [
         "--output-format",
-        "json",
+        "stream-json",
         "-p",
         "{{prompt}}"
       ],

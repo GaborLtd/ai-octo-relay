@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -24,6 +26,14 @@ type Service struct {
 	store    store.StateStore
 	events   store.EventStore
 }
+
+const (
+	geminiSummaryPromptLimit = 1200
+	geminiSummaryFieldLimit  = 320
+	geminiSummaryFilesLimit  = 8
+)
+
+var filePathPattern = regexp.MustCompile(`(?:[A-Za-z0-9._-]+/)*[A-Za-z0-9._-]+\.[A-Za-z0-9_-]+`)
 
 type Scope struct {
 	ProjectName string
@@ -697,15 +707,25 @@ func (s *Service) RunPrompt(ctx context.Context, channelID, threadTS, slackUserI
 		return "", fmt.Errorf("agent %q not found", scope.AgentName)
 	}
 
+	rawPrompt := prompt
 	nativeSession := s.store.GetSession(scope.SessionKey)
 	nativeSessionID := ""
 	if usesNativeSession(scope.AgentName) {
 		nativeSessionID = nativeSession.NativeID
 	} else if nativeSession.NativeID != "" {
+		summary := nativeSession.Summary
+		summaryUpdatedAt := nativeSession.SummaryUpdatedAt
 		if clearErr := s.store.ClearSession(scope.SessionKey); clearErr != nil {
 			return "", clearErr
 		}
-		nativeSession = store.NativeSessionState{}
+		nativeSession = store.NativeSessionState{
+			Agent:            scope.AgentName,
+			Project:          scope.ProjectName,
+			ThreadKey:        scope.ThreadKey,
+			ChannelID:        channelID,
+			Summary:          summary,
+			SummaryUpdatedAt: summaryUpdatedAt,
+		}
 	}
 	if nativeSessionID == "" && scope.AgentName == "claude" {
 		nativeSessionID, err = newSessionUUID()
@@ -713,13 +733,14 @@ func (s *Service) RunPrompt(ctx context.Context, channelID, threadTS, slackUserI
 			return "", fmt.Errorf("generate claude session id: %w", err)
 		}
 	}
+	prompt = s.applyAgentContextPrompt(scope, nativeSession, rawPrompt)
 
 	req := agent.RunRequest{
 		AgentName:       scope.AgentName,
 		ProjectName:     scope.ProjectName,
 		ProjectPath:     projectCfg.Path,
 		Prompt:          prompt,
-		PromptSuffix:    s.promptSuffixForContext(isDM),
+		PromptSuffix:    s.promptSuffixForContext(scope.AgentName, isDM),
 		DMReadOnly:      isDM && s.cfg.DMReadOnly,
 		SessionKey:      scope.SessionKey,
 		ThreadTS:        threadTS,
@@ -762,9 +783,166 @@ func (s *Service) RunPrompt(ctx context.Context, channelID, threadTS, slackUserI
 		})
 	}
 	if friendly := summarizeAgentFailure(scope.AgentName, result.Output, err); friendly != "" {
+		if updateErr := s.updateAgentSummary(scope, nativeSession, rawPrompt, friendly); updateErr != nil {
+			return "", updateErr
+		}
 		return friendly, nil
 	}
+	if updateErr := s.updateAgentSummary(scope, nativeSession, rawPrompt, result.Output); updateErr != nil {
+		return "", updateErr
+	}
 	return result.Output, err
+}
+
+func (s *Service) applyAgentContextPrompt(scope Scope, session store.NativeSessionState, prompt string) string {
+	if scope.AgentName != "gemini" {
+		return prompt
+	}
+	summary := strings.TrimSpace(session.Summary)
+	if summary == "" {
+		return prompt
+	}
+	return strings.TrimSpace(strings.Join([]string{
+		"Gemini thread summary:",
+		summary,
+		"",
+		"Latest user request:",
+		strings.TrimSpace(prompt),
+	}, "\n"))
+}
+
+func (s *Service) updateAgentSummary(scope Scope, existing store.NativeSessionState, prompt, output string) error {
+	if scope.AgentName != "gemini" {
+		return nil
+	}
+	updatedSummary := buildGeminiSummary(existing.Summary, prompt, output)
+	if strings.TrimSpace(updatedSummary) == "" {
+		return nil
+	}
+	state := existing
+	state.Agent = scope.AgentName
+	state.Project = scope.ProjectName
+	state.ThreadKey = scope.ThreadKey
+	state.Summary = updatedSummary
+	state.SummaryUpdatedAt = time.Now().Format(time.RFC3339)
+	return s.store.SetSession(scope.SessionKey, state)
+}
+
+func buildGeminiSummary(previousSummary, prompt, output string) string {
+	goal := extractGeminiSummaryField(previousSummary, "Goal")
+	if goal == "" {
+		goal = compactSummaryLine(prompt, geminiSummaryFieldLimit)
+	}
+	latestRequest := compactSummaryLine(prompt, geminiSummaryFieldLimit)
+	status := summarizeGeminiOutcome(output)
+	files := extractGeminiFiles(previousSummary + "\n" + prompt + "\n" + output)
+	notes := compactSummaryLine(extractGeminiNotes(output), geminiSummaryFieldLimit)
+
+	lines := []string{
+		"Goal: " + goal,
+		"Latest request: " + latestRequest,
+		"Status: " + status,
+	}
+	if len(files) > 0 {
+		lines = append(lines, "Files: "+strings.Join(files, ", "))
+	}
+	if notes != "" {
+		lines = append(lines, "Notes: "+notes)
+	}
+	summary := strings.Join(lines, "\n")
+	return compactSummaryText(summary, geminiSummaryPromptLimit)
+}
+
+func summarizeGeminiOutcome(output string) string {
+	text := strings.ToLower(strings.TrimSpace(output))
+	switch {
+	case text == "":
+		return "No output captured yet."
+	case strings.Contains(text, "read-only") || strings.Contains(text, "唯讀") || strings.Contains(text, "手動") || strings.Contains(text, "please manually"):
+		return "Agent produced guidance or draft text; no workspace change was confirmed."
+	case strings.Contains(text, "created ") || strings.Contains(text, "updated ") || strings.Contains(text, "modified ") || strings.Contains(text, "wrote ") || strings.Contains(text, "已更新") || strings.Contains(text, "已建立") || strings.Contains(text, "已寫入"):
+		return "Agent claimed workspace changes or file updates."
+	case strings.Contains(text, "error") || strings.Contains(text, "failed") || strings.Contains(text, "無法") || strings.Contains(text, "not found"):
+		return "Agent hit an error or blockage."
+	default:
+		return "Agent replied in chat; file changes were not clearly confirmed."
+	}
+}
+
+func extractGeminiFiles(text string) []string {
+	matches := filePathPattern.FindAllString(text, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	files := make([]string, 0, len(matches))
+	for _, match := range matches {
+		if strings.Contains(match, "..") {
+			continue
+		}
+		if _, ok := seen[match]; ok {
+			continue
+		}
+		seen[match] = struct{}{}
+		files = append(files, match)
+		if len(files) >= geminiSummaryFilesLimit {
+			break
+		}
+	}
+	slices.Sort(files)
+	return files
+}
+
+func extractGeminiNotes(output string) string {
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	for _, raw := range lines {
+		line := compactSummaryLine(raw, geminiSummaryFieldLimit)
+		if line == "" {
+			continue
+		}
+		if strings.HasPrefix(strings.ToLower(line), "goal:") ||
+			strings.HasPrefix(strings.ToLower(line), "latest request:") ||
+			strings.HasPrefix(strings.ToLower(line), "status:") ||
+			strings.HasPrefix(strings.ToLower(line), "files:") ||
+			strings.HasPrefix(strings.ToLower(line), "notes:") {
+			continue
+		}
+		return line
+	}
+	return ""
+}
+
+func extractGeminiSummaryField(summary, field string) string {
+	prefix := field + ":"
+	for _, raw := range strings.Split(summary, "\n") {
+		line := strings.TrimSpace(raw)
+		if strings.HasPrefix(line, prefix) {
+			return strings.TrimSpace(strings.TrimPrefix(line, prefix))
+		}
+	}
+	return ""
+}
+
+func compactSummaryLine(text string, limit int) string {
+	text = strings.Join(strings.Fields(strings.TrimSpace(text)), " ")
+	if limit <= 0 || len(text) <= limit {
+		return text
+	}
+	if limit <= 3 {
+		return text[:limit]
+	}
+	return text[:limit-3] + "..."
+}
+
+func compactSummaryText(text string, limit int) string {
+	text = strings.TrimSpace(text)
+	if limit <= 0 || len(text) <= limit {
+		return text
+	}
+	if limit <= 3 {
+		return text[:limit]
+	}
+	return strings.TrimSpace(text[:limit-3]) + "..."
 }
 
 func shouldRetryWithFreshNativeSession(agentName, nativeSessionID string, runErr error, output string) bool {
@@ -829,14 +1007,59 @@ func summarizeAgentFailure(agentName, output string, runErr error) string {
 	return ""
 }
 
-func (s *Service) promptSuffixForContext(isDM bool) string {
+func (s *Service) promptSuffixForContext(agentName string, isDM bool) string {
+	languagePrompt := promptSuffixForLanguage(s.cfg.Language)
+	basePrompt := s.promptTemplateForAgent(agentName, isDM)
 	if isDM {
 		if !s.cfg.DMReadOnly {
-			return ""
+			return strings.TrimSpace(strings.TrimSpace(basePrompt) + "\n" + languagePrompt)
+		}
+		return strings.TrimSpace(strings.TrimSpace(basePrompt) + "\n" + languagePrompt)
+	}
+	return strings.TrimSpace(strings.TrimSpace(basePrompt) + "\n" + languagePrompt)
+}
+
+func (s *Service) promptTemplateForAgent(agentName string, isDM bool) string {
+	if agentPrompt, ok := s.cfg.Prompts.Agents[agentName]; ok {
+		if isDM {
+			if strings.TrimSpace(agentPrompt.DMReadOnly) != "" {
+				return agentPrompt.DMReadOnly
+			}
+		} else if strings.TrimSpace(agentPrompt.ChannelWrite) != "" {
+			return agentPrompt.ChannelWrite
+		}
+	}
+	if isDM {
+		if strings.TrimSpace(s.cfg.Prompts.Default.DMReadOnly) != "" {
+			return s.cfg.Prompts.Default.DMReadOnly
 		}
 		return s.cfg.DMReadOnlyPrompt
 	}
+	if strings.TrimSpace(s.cfg.Prompts.Default.ChannelWrite) != "" {
+		return s.cfg.Prompts.Default.ChannelWrite
+	}
 	return s.cfg.ChannelWritePrompt
+}
+
+func promptSuffixForLanguage(language string) string {
+	switch normalizeLanguage(language) {
+	case "", "en", "en-us", "en-gb":
+		return ""
+	case "zh", "zh-tw", "zh-hant", "traditional-chinese":
+		return "請一律使用繁體中文回覆。"
+	case "zh-cn", "zh-hans", "simplified-chinese":
+		return "請一律使用簡體中文回覆。"
+	case "ja", "ja-jp", "japanese":
+		return "請一律使用日文回覆。"
+	default:
+		return "Please reply in " + strings.TrimSpace(language) + "."
+	}
+}
+
+func normalizeLanguage(language string) string {
+	normalized := strings.ToLower(strings.TrimSpace(language))
+	normalized = strings.ReplaceAll(normalized, "_", "-")
+	return normalized
 }
 
 func (s *Service) SessionStatusText(channelID, threadTS string) (string, error) {

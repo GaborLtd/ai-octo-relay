@@ -81,6 +81,8 @@
 cp config.example.json config.json
 ```
 
+詳細的設定選項與範例請參考 [CONFIG.md](./CONFIG.md)。
+
 Slack token 可直接放在 `config.json`，也可用環境變數覆寫：
 
 ```bash
@@ -94,7 +96,12 @@ export SLACK_BOT_TOKEN=xoxb-...
 - `projects[].default_agent`: 該 project 的預設 agent
 - `projects[].commands`: `!cmd` 可執行的白名單命令
 - `default_agent`: 全域預設 agent
+- `language`: 預設回覆語言；例如 `zh-TW` 會自動要求 agent 使用繁體中文
 - `quiet_by_default`: 是否先用安靜模式回覆
+- `prompts.default.channel_write`: 一般 channel / thread 模式的預設 prompt
+- `prompts.default.dm_read_only`: 直接私訊 bot 時的預設 read-only prompt
+- `prompts.agents.<name>.channel_write`: 針對特定 agent 的 channel / thread 客製 prompt
+- `prompts.agents.<name>.dm_read_only`: 針對特定 agent 的 DM 客製 prompt
 - `channel_write_prompt`: 一般 channel / thread 模式下，提示 agent 優先直接修改 project 檔案，而不是只在 Slack 貼草稿
 - `dm_read_only`: 是否限制 Slack 直接私訊 bot 的 DM（`channel_type = im`）為唯讀；不影響一般 channel / private channel 內的 `@bot` 對話
 - `state_store`: session / scope 狀態儲存

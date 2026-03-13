@@ -8,12 +8,14 @@ type ScopeState struct {
 }
 
 type NativeSessionState struct {
-	Agent     string `json:"agent"`
-	NativeID  string `json:"native_id"`
-	UpdatedAt string `json:"updated_at,omitempty"`
-	Project   string `json:"project,omitempty"`
-	ThreadKey string `json:"thread_key,omitempty"`
-	ChannelID string `json:"channel_id,omitempty"`
+	Agent            string `json:"agent"`
+	NativeID         string `json:"native_id"`
+	UpdatedAt        string `json:"updated_at,omitempty"`
+	Project          string `json:"project,omitempty"`
+	ThreadKey        string `json:"thread_key,omitempty"`
+	ChannelID        string `json:"channel_id,omitempty"`
+	Summary          string `json:"summary,omitempty"`
+	SummaryUpdatedAt string `json:"summary_updated_at,omitempty"`
 }
 
 type State struct {

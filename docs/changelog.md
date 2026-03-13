@@ -14,6 +14,7 @@
 - `!agent model list <name>` 改為可列出三家 agent 的 model 清單來源（API / cache / fallback）
 - `gemini` 改為 fresh oneshot，不再保存 / 重用 native session
 - `gemini` 不再注入 `maxSessionTurns`，避免單次請求也被 CLI turn limit 打斷
+- `gemini` 新增 thread summary continuity，只保存精簡摘要，不回放完整 thread transcript
 - Gemini 常見錯誤摘要改為較保守，避免把所有 `code 53` 都誤導成 session resume 問題
 
 若要看更細的歷史，直接查 git log。

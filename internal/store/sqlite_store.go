@@ -32,6 +32,9 @@ func NewSQLiteStateStore(path string) (*SQLiteStateStore, error) {
 	if err := store.exec(schemaStateSQL); err != nil {
 		return nil, err
 	}
+	if err := store.ensureSessionColumns(); err != nil {
+		return nil, err
+	}
 	return store, nil
 }
 
@@ -75,7 +78,7 @@ func (s *SQLiteStateStore) GetSession(sessionKey string) NativeSessionState {
 	defer s.mu.Unlock()
 
 	rows, err := sqliteQuery[sessionRow](s.path, fmt.Sprintf(
-		`SELECT agent, native_id, updated_at, project, thread_key, channel_id FROM sessions WHERE session_key = %s LIMIT 1;`,
+		`SELECT agent, native_id, updated_at, project, thread_key, channel_id, summary, summary_updated_at FROM sessions WHERE session_key = %s LIMIT 1;`,
 		sqliteString(sessionKey),
 	))
 	if err != nil || len(rows) == 0 {
@@ -83,26 +86,30 @@ func (s *SQLiteStateStore) GetSession(sessionKey string) NativeSessionState {
 	}
 	row := rows[0]
 	return NativeSessionState{
-		Agent:     row.Agent,
-		NativeID:  row.NativeID,
-		UpdatedAt: row.UpdatedAt,
-		Project:   row.Project,
-		ThreadKey: row.ThreadKey,
-		ChannelID: row.ChannelID,
+		Agent:            row.Agent,
+		NativeID:         row.NativeID,
+		UpdatedAt:        row.UpdatedAt,
+		Project:          row.Project,
+		ThreadKey:        row.ThreadKey,
+		ChannelID:        row.ChannelID,
+		Summary:          row.Summary,
+		SummaryUpdatedAt: row.SummaryUpdatedAt,
 	}
 }
 
 func (s *SQLiteStateStore) SetSession(sessionKey string, state NativeSessionState) error {
 	return s.exec(fmt.Sprintf(
-		`INSERT INTO sessions (session_key, agent, native_id, updated_at, project, thread_key, channel_id)
-VALUES (%s, %s, %s, %s, %s, %s, %s)
+		`INSERT INTO sessions (session_key, agent, native_id, updated_at, project, thread_key, channel_id, summary, summary_updated_at)
+VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
 ON CONFLICT(session_key) DO UPDATE SET
 agent = excluded.agent,
 native_id = excluded.native_id,
 updated_at = excluded.updated_at,
 project = excluded.project,
 thread_key = excluded.thread_key,
-channel_id = excluded.channel_id;`,
+channel_id = excluded.channel_id,
+summary = excluded.summary,
+summary_updated_at = excluded.summary_updated_at;`,
 		sqliteString(sessionKey),
 		sqliteString(state.Agent),
 		sqliteString(state.NativeID),
@@ -110,6 +117,8 @@ channel_id = excluded.channel_id;`,
 		sqliteString(state.Project),
 		sqliteString(state.ThreadKey),
 		sqliteString(state.ChannelID),
+		sqliteString(state.Summary),
+		sqliteString(state.SummaryUpdatedAt),
 	))
 }
 
@@ -215,12 +224,14 @@ type scopeRow struct {
 }
 
 type sessionRow struct {
-	Agent     string `json:"agent"`
-	NativeID  string `json:"native_id"`
-	UpdatedAt string `json:"updated_at"`
-	Project   string `json:"project"`
-	ThreadKey string `json:"thread_key"`
-	ChannelID string `json:"channel_id"`
+	Agent            string `json:"agent"`
+	NativeID         string `json:"native_id"`
+	UpdatedAt        string `json:"updated_at"`
+	Project          string `json:"project"`
+	ThreadKey        string `json:"thread_key"`
+	ChannelID        string `json:"channel_id"`
+	Summary          string `json:"summary"`
+	SummaryUpdatedAt string `json:"summary_updated_at"`
 }
 
 type sqliteBoolValue struct {
@@ -279,6 +290,30 @@ func ensureSQLitePath(path string) error {
 	return nil
 }
 
+func (s *SQLiteStateStore) ensureSessionColumns() error {
+	rows, err := sqliteQuery[struct {
+		Name string `json:"name"`
+	}](s.path, `PRAGMA table_info(sessions);`)
+	if err != nil {
+		return err
+	}
+	columns := map[string]struct{}{}
+	for _, row := range rows {
+		columns[row.Name] = struct{}{}
+	}
+	if _, ok := columns["summary"]; !ok {
+		if err := s.exec(`ALTER TABLE sessions ADD COLUMN summary TEXT NOT NULL DEFAULT '';`); err != nil {
+			return err
+		}
+	}
+	if _, ok := columns["summary_updated_at"]; !ok {
+		if err := s.exec(`ALTER TABLE sessions ADD COLUMN summary_updated_at TEXT NOT NULL DEFAULT '';`); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func sqliteString(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "''") + "'"
 }
@@ -312,7 +347,9 @@ CREATE TABLE IF NOT EXISTS sessions (
 	updated_at TEXT NOT NULL DEFAULT '',
 	project TEXT NOT NULL DEFAULT '',
 	thread_key TEXT NOT NULL DEFAULT '',
-	channel_id TEXT NOT NULL DEFAULT ''
+	channel_id TEXT NOT NULL DEFAULT '',
+	summary TEXT NOT NULL DEFAULT '',
+	summary_updated_at TEXT NOT NULL DEFAULT ''
 );`
 
 const schemaEventSQL = `

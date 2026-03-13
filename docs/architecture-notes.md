@@ -86,6 +86,7 @@ agent selector 支援：
   - `fresh oneshot`
   - 目前不再保存 / 重用 native session
   - 目前也不再注入 `maxSessionTurns`
+  - 會額外保存精簡的 thread summary，供下一輪 Gemini 請求使用
   - 原因是先前整合邏輯與實際 CLI 行為不一致，容易誤判成 session 問題
 
 目前內建 agent：

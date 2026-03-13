@@ -12,6 +12,7 @@ Gemini 是目前三家 CLI 中最容易出現 session / model / server capacity 
 - 預設 model 建議 `gemini-2.5-flash`
 - 目前視為 `fresh oneshot`
 - 不要再設定 `max_session_turns`
+- relay 端會替 Gemini 保存精簡 thread summary，避免完全失憶
 - 不建議把 Gemini 當最穩定主力 agent
 
 ## 已知坑
@@ -68,6 +69,10 @@ Gemini 在本專案中目前不再走 native session resume，而是固定 fresh
 - 不保存 / 不重用 Gemini native session
 - `!session restart` 不會幫 Gemini 重接原生 session
 - 同一個新請求就是一次新的 CLI 執行
+- 但會把前一輪萃取出的精簡 summary 注入下一輪 prompt
+- 非互動模式目前使用 `--output-format stream-json`，方便觀察 tool / error 事件
+- channel / thread 模式下會使用 `--approval-mode auto_edit`
+- 直接私訊 bot 的 DM 才會使用 `--approval-mode plan --sandbox`
 
 因此目前實際建議是：
 

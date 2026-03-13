@@ -58,3 +58,55 @@ func TestSQLiteStateStoreRoundTrip(t *testing.T) {
 		t.Fatalf("unexpected thread state: %+v", got)
 	}
 }
+
+func TestJSONStoreSessionSummaryRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+
+	stateStore, err := NewJSONStore(path)
+	if err != nil {
+		t.Fatalf("NewJSONStore() error = %v", err)
+	}
+
+	want := NativeSessionState{
+		Agent:            "gemini",
+		Summary:          "Goal: 建立 CONFIG.md",
+		SummaryUpdatedAt: "2026-03-13T00:00:00Z",
+	}
+	if err := stateStore.SetSession("session-1", want); err != nil {
+		t.Fatalf("SetSession() error = %v", err)
+	}
+
+	got := stateStore.GetSession("session-1")
+	if got.Summary != want.Summary || got.SummaryUpdatedAt != want.SummaryUpdatedAt {
+		t.Fatalf("unexpected session summary state: %+v", got)
+	}
+}
+
+func TestSQLiteStateStoreSessionSummaryRoundTrip(t *testing.T) {
+	if _, err := exec.LookPath("sqlite3"); err != nil {
+		t.Skip("sqlite3 command not available")
+	}
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.db")
+
+	stateStore, err := NewSQLiteStateStore(path)
+	if err != nil {
+		t.Fatalf("NewSQLiteStateStore() error = %v", err)
+	}
+
+	want := NativeSessionState{
+		Agent:            "gemini",
+		Summary:          "Goal: 建立 CONFIG.md",
+		SummaryUpdatedAt: "2026-03-13T00:00:00Z",
+	}
+	if err := stateStore.SetSession("session-1", want); err != nil {
+		t.Fatalf("SetSession() error = %v", err)
+	}
+
+	got := stateStore.GetSession("session-1")
+	if got.Summary != want.Summary || got.SummaryUpdatedAt != want.SummaryUpdatedAt {
+		t.Fatalf("unexpected sqlite session summary state: %+v", got)
+	}
+}

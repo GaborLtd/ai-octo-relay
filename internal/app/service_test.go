@@ -91,12 +91,87 @@ func TestPromptSuffixForContextUsesChannelWritePromptOutsideDM(t *testing.T) {
 	svc.cfg.DMReadOnly = true
 	svc.cfg.ChannelWritePrompt = "channel-write"
 	svc.cfg.DMReadOnlyPrompt = "dm-readonly"
+	svc.cfg.Prompts.Default.ChannelWrite = "channel-write"
+	svc.cfg.Prompts.Default.DMReadOnly = "dm-readonly"
 
-	if got := svc.promptSuffixForContext(false); got != "channel-write" {
+	if got := svc.promptSuffixForContext("codex", false); got != "channel-write" {
 		t.Fatalf("promptSuffixForContext(false) = %q, want %q", got, "channel-write")
 	}
-	if got := svc.promptSuffixForContext(true); got != "dm-readonly" {
+	if got := svc.promptSuffixForContext("codex", true); got != "dm-readonly" {
 		t.Fatalf("promptSuffixForContext(true) = %q, want %q", got, "dm-readonly")
+	}
+}
+
+func TestPromptSuffixForContextAppendsTraditionalChineseInstruction(t *testing.T) {
+	svc := newTestService(t)
+	svc.cfg.Language = "zh-TW"
+	svc.cfg.ChannelWritePrompt = "channel-write"
+	svc.cfg.Prompts.Default.ChannelWrite = "channel-write"
+
+	got := svc.promptSuffixForContext("codex", false)
+	if !strings.Contains(got, "channel-write") {
+		t.Fatalf("promptSuffixForContext(false) missing base prompt: %q", got)
+	}
+	if !strings.Contains(got, "請一律使用繁體中文回覆。") {
+		t.Fatalf("promptSuffixForContext(false) missing language prompt: %q", got)
+	}
+}
+
+func TestPromptSuffixForLanguageEnglishAddsNothing(t *testing.T) {
+	if got := promptSuffixForLanguage("en"); got != "" {
+		t.Fatalf("promptSuffixForLanguage(en) = %q, want empty", got)
+	}
+}
+
+func TestPromptSuffixForContextUsesAgentSpecificPrompt(t *testing.T) {
+	svc := newTestService(t)
+	svc.cfg.Prompts.Default.ChannelWrite = "default-channel"
+	svc.cfg.Prompts.Default.DMReadOnly = "default-dm"
+	svc.cfg.Prompts.Agents["gemini"] = config.PromptModeConfig{
+		ChannelWrite: "gemini-channel",
+		DMReadOnly:   "gemini-dm",
+	}
+
+	if got := svc.promptSuffixForContext("gemini", false); got != "gemini-channel" {
+		t.Fatalf("promptSuffixForContext(gemini, false) = %q", got)
+	}
+	if got := svc.promptSuffixForContext("gemini", true); got != "gemini-dm" {
+		t.Fatalf("promptSuffixForContext(gemini, true) = %q", got)
+	}
+	if got := svc.promptSuffixForContext("codex", false); got != "default-channel" {
+		t.Fatalf("promptSuffixForContext(codex, false) = %q", got)
+	}
+}
+
+func TestBuildGeminiSummaryKeepsGoalAndFiles(t *testing.T) {
+	previous := "Goal: 建立 CONFIG.md 說明設定方式\nLatest request: 幫我整理 config\nStatus: Agent replied in chat; file changes were not clearly confirmed.\nFiles: config.example.json, internal/config/config.go"
+	output := "我已更新 docs/architecture-notes.md，並建議建立 CONFIG.md，請手動貼上。"
+
+	got := buildGeminiSummary(previous, "可以直接幫我寫入 CONFIG.md 嗎？", output)
+
+	if !strings.Contains(got, "Goal: 建立 CONFIG.md 說明設定方式") {
+		t.Fatalf("buildGeminiSummary() missing goal: %q", got)
+	}
+	if !strings.Contains(got, "Latest request: 可以直接幫我寫入 CONFIG.md 嗎？") {
+		t.Fatalf("buildGeminiSummary() missing latest request: %q", got)
+	}
+	if !strings.Contains(got, "Files:") || !strings.Contains(got, "internal/config/config.go") {
+		t.Fatalf("buildGeminiSummary() missing files: %q", got)
+	}
+}
+
+func TestApplyAgentContextPromptForGeminiIncludesSummary(t *testing.T) {
+	svc := newTestService(t)
+	scope := Scope{AgentName: "gemini"}
+	session := store.NativeSessionState{Summary: "Goal: 建立 CONFIG.md"}
+
+	got := svc.applyAgentContextPrompt(scope, session, "請直接寫入")
+
+	if !strings.Contains(got, "Gemini thread summary:") {
+		t.Fatalf("applyAgentContextPrompt() missing summary header: %q", got)
+	}
+	if !strings.Contains(got, "Latest user request:\n請直接寫入") {
+		t.Fatalf("applyAgentContextPrompt() missing latest request: %q", got)
 	}
 }
 
@@ -120,6 +195,9 @@ func newTestService(t *testing.T) *Service {
 		CommandPrefix:  "!",
 		DefaultAgent:   "codex",
 		QuietByDefault: true,
+		Prompts: config.PromptConfig{
+			Agents: map[string]config.PromptModeConfig{},
+		},
 		Projects: []config.ProjectConfig{
 			{
 				Name:         "relay",

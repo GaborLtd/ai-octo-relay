@@ -344,7 +344,7 @@ func (a codexAdapter) Build(req RunRequest, cfg config.AgentConfig) ExecSpec {
 
 func (a geminiAdapter) Build(req RunRequest, cfg config.AgentConfig) ExecSpec {
 	command := firstNonEmpty(cfg.Command, "gemini")
-	oneshotArgs := defaultArgs(cfg.Args, "--output-format", "json", "-p", "{{prompt}}")
+	oneshotArgs := defaultArgs(cfg.Args, "--output-format", "stream-json", "-p", "{{prompt}}")
 	if strings.TrimSpace(cfg.Model) != "" && !hasOptionWithValue(oneshotArgs, "-m", cfg.Model) {
 		oneshotArgs = append([]string{"-m", cfg.Model}, oneshotArgs...)
 	}
@@ -441,14 +441,15 @@ func applyClaudeDMReadOnlyPolicy(spec ExecSpec, req RunRequest) ExecSpec {
 }
 
 func applyGeminiDMReadOnlyPolicy(spec ExecSpec, req RunRequest) ExecSpec {
-	if !req.DMReadOnly {
+	if req.DMReadOnly {
+		spec.Args = prependMissingOptions(spec.Args,
+			"--approval-mode", "plan",
+			"--sandbox",
+		)
+		spec.Env["SEATBELT_PROFILE"] = "strict-open"
 		return spec
 	}
-	spec.Args = prependMissingOptions(spec.Args,
-		"--approval-mode", "plan",
-		"--sandbox",
-	)
-	spec.Env["SEATBELT_PROFILE"] = "strict-open"
+	spec.Args = prependMissingOptions(spec.Args, "--approval-mode", "auto_edit")
 	return spec
 }
 
@@ -574,7 +575,15 @@ func runOneShot(ctx context.Context, req RunRequest, spec ExecSpec, onChunk func
 			target.WriteByte('\n')
 			writeMu.Unlock()
 			if streamChunks && onChunk != nil && line != "" {
-				onChunk(line)
+				chunk := line
+				if spec.OutputParser == "gemini-stream-json" {
+					if parsedChunk := parseGeminiStreamChunk(rawLine); parsedChunk != "" {
+						chunk = parsedChunk
+					} else {
+						continue
+					}
+				}
+				onChunk(chunk)
 			}
 		}
 	}
@@ -724,7 +733,7 @@ func inferOutputParser(agentName, mode string) string {
 	case "codex":
 		return "codex-jsonl"
 	case "gemini":
-		return "gemini-json"
+		return "gemini-stream-json"
 	default:
 		return ""
 	}
@@ -734,8 +743,8 @@ func parseStructuredOutput(parser, stdoutText string) (string, string, bool) {
 	switch parser {
 	case "codex-jsonl":
 		return parseCodexJSONL(stdoutText)
-	case "gemini-json":
-		return parseGeminiJSON(stdoutText)
+	case "gemini-stream-json":
+		return parseGeminiStreamJSON(stdoutText)
 	default:
 		return "", "", false
 	}
@@ -759,15 +768,76 @@ func parseCodexJSONL(stdoutText string) (string, string, bool) {
 	return "", sessionID, sessionID != ""
 }
 
-func parseGeminiJSON(stdoutText string) (string, string, bool) {
-	var payload struct {
-		SessionID string `json:"session_id"`
-		Response  string `json:"response"`
+func parseGeminiStreamJSON(stdoutText string) (string, string, bool) {
+	var (
+		sessionID string
+		parts     []string
+		errors    []string
+		parsed    bool
+	)
+	for _, rawLine := range strings.Split(stdoutText, "\n") {
+		line := strings.TrimSpace(rawLine)
+		if line == "" || !strings.HasPrefix(line, "{") {
+			continue
+		}
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(line), &payload); err != nil {
+			continue
+		}
+		parsed = true
+		if sessionID == "" {
+			sessionID = findStringValue(payload, "session_id", "sessionId")
+		}
+		eventType := strings.ToLower(findStringValue(payload, "type"))
+		switch eventType {
+		case "content", "message":
+			if text := extractGeminiEventText(payload); text != "" {
+				parts = append(parts, text)
+			}
+		case "error":
+			if text := extractGeminiEventText(payload); text != "" {
+				errors = append(errors, text)
+			}
+		}
 	}
-	if err := json.Unmarshal([]byte(stdoutText), &payload); err != nil {
-		return "", "", false
+	output := strings.TrimSpace(strings.Join(parts, "\n"))
+	if output == "" && len(errors) > 0 {
+		output = strings.TrimSpace(strings.Join(errors, "\n"))
 	}
-	return strings.TrimSpace(payload.Response), strings.TrimSpace(payload.SessionID), true
+	return output, strings.TrimSpace(sessionID), parsed
+}
+
+func parseGeminiStreamChunk(rawLine string) string {
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(rawLine), &payload); err != nil {
+		return ""
+	}
+	eventType := strings.ToLower(findStringValue(payload, "type"))
+	switch eventType {
+	case "content", "message":
+		return extractGeminiEventText(payload)
+	case "error":
+		text := extractGeminiEventText(payload)
+		if text == "" {
+			return ""
+		}
+		return "error: " + text
+	default:
+		return ""
+	}
+}
+
+func extractGeminiEventText(payload map[string]any) string {
+	if text := strings.TrimSpace(findStringValue(payload["value"], "text", "value", "content", "message")); text != "" {
+		return text
+	}
+	if text := strings.TrimSpace(findStringValue(payload, "response")); text != "" {
+		return text
+	}
+	if value, ok := payload["value"].(string); ok {
+		return strings.TrimSpace(value)
+	}
+	return ""
 }
 
 func findStringValue(value any, keys ...string) string {

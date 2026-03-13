@@ -12,6 +12,7 @@ import (
 type Config struct {
 	CommandPrefix    string                 `json:"command_prefix"`
 	DefaultAgent     string                 `json:"default_agent"`
+	Language         string                 `json:"language"`
 	StorePath        string                 `json:"store_path"`
 	StateStore       StorageConfig          `json:"state_store"`
 	EventStore       StorageConfig          `json:"event_store"`
@@ -20,9 +21,20 @@ type Config struct {
 	DMReadOnly       bool                   `json:"dm_read_only"`
 	ChannelWritePrompt string               `json:"channel_write_prompt"`
 	DMReadOnlyPrompt string                 `json:"dm_read_only_prompt"`
+	Prompts          PromptConfig           `json:"prompts"`
 	Slack            SlackConfig            `json:"slack"`
 	Projects         []ProjectConfig        `json:"projects"`
 	Agents           map[string]AgentConfig `json:"agents"`
+}
+
+type PromptConfig struct {
+	Default PromptModeConfig            `json:"default"`
+	Agents  map[string]PromptModeConfig `json:"agents"`
+}
+
+type PromptModeConfig struct {
+	ChannelWrite string `json:"channel_write"`
+	DMReadOnly   string `json:"dm_read_only"`
 }
 
 type StorageConfig struct {
@@ -128,6 +140,15 @@ func applyDefaults(cfg *Config) {
 	if cfg.DMReadOnlyPrompt == "" {
 		cfg.DMReadOnlyPrompt = defaultDMReadOnlyPrompt
 	}
+	if strings.TrimSpace(cfg.Prompts.Default.ChannelWrite) == "" {
+		cfg.Prompts.Default.ChannelWrite = cfg.ChannelWritePrompt
+	}
+	if strings.TrimSpace(cfg.Prompts.Default.DMReadOnly) == "" {
+		cfg.Prompts.Default.DMReadOnly = cfg.DMReadOnlyPrompt
+	}
+	if cfg.Prompts.Agents == nil {
+		cfg.Prompts.Agents = map[string]PromptModeConfig{}
+	}
 	for name, agent := range cfg.Agents {
 		if agent.TimeoutSeconds <= 0 {
 			agent.TimeoutSeconds = 1800
@@ -151,6 +172,9 @@ func applyDefaults(cfg *Config) {
 			agent.Aliases = []string{}
 		}
 		cfg.Agents[name] = agent
+		if _, ok := cfg.Prompts.Agents[name]; !ok {
+			cfg.Prompts.Agents[name] = PromptModeConfig{}
+		}
 	}
 }
 
