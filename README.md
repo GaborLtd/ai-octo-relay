@@ -52,6 +52,10 @@
 !cmd list
 !cmd run <name>
 !git status
+!git add [path...]
+!git commit <message>
+!git checkout <branch>
+!git checkout -b <new-branch>
 !git diff [--stat|--staged|--cached]
 !git log [count]
 !git branch
@@ -71,6 +75,7 @@
 
 - `!cmd` 只執行 `projects[].commands` 內定義的白名單命令
 - `!git` 只開放固定子命令與少量參數
+- `!git add` 與 `!git commit` 已拆開；不會自動一起執行
 - `dm_read_only = true` 時，Slack 直接私訊 bot 的 DM（`channel_type = im`）會拒絕 `!cmd` 與 `!git`
 
 ## 設定方式

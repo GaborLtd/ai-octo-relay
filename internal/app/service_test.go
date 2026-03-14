@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -228,6 +229,67 @@ func TestFormatGitBranchOutput(t *testing.T) {
 	}
 	if !strings.Contains(got, "- `origin/main` 50b0c04 Restrict DM to question-only interactions") {
 		t.Fatalf("formatGitBranchOutput() missing remote branch: %q", got)
+	}
+}
+
+func TestValidateGitArgsAddDefaultsToAll(t *testing.T) {
+	got, err := validateGitArgs([]string{"add"})
+	if err != nil {
+		t.Fatalf("validateGitArgs(add) error = %v", err)
+	}
+	want := []string{"add", "-A"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("validateGitArgs(add) = %v, want %v", got, want)
+	}
+}
+
+func TestValidateGitArgsAddWithPaths(t *testing.T) {
+	got, err := validateGitArgs([]string{"add", "README.md", "internal/app/service.go"})
+	if err != nil {
+		t.Fatalf("validateGitArgs(add paths) error = %v", err)
+	}
+	want := []string{"add", "--", "README.md", "internal/app/service.go"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("validateGitArgs(add paths) = %v, want %v", got, want)
+	}
+}
+
+func TestValidateGitArgsCommit(t *testing.T) {
+	got, err := validateGitArgs([]string{"commit", "update", "docs"})
+	if err != nil {
+		t.Fatalf("validateGitArgs(commit) error = %v", err)
+	}
+	want := []string{"commit", "-m", "update docs"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("validateGitArgs(commit) = %v, want %v", got, want)
+	}
+}
+
+func TestValidateGitArgsCheckout(t *testing.T) {
+	got, err := validateGitArgs([]string{"checkout", "feature/docs"})
+	if err != nil {
+		t.Fatalf("validateGitArgs(checkout) error = %v", err)
+	}
+	want := []string{"checkout", "feature/docs"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("validateGitArgs(checkout) = %v, want %v", got, want)
+	}
+}
+
+func TestValidateGitArgsCheckoutNewBranch(t *testing.T) {
+	got, err := validateGitArgs([]string{"checkout", "-b", "feature/docs"})
+	if err != nil {
+		t.Fatalf("validateGitArgs(checkout -b) error = %v", err)
+	}
+	want := []string{"checkout", "-b", "feature/docs"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("validateGitArgs(checkout -b) = %v, want %v", got, want)
+	}
+}
+
+func TestValidateGitArgsRejectsInvalidBranchName(t *testing.T) {
+	if _, err := validateGitArgs([]string{"checkout", "../oops"}); err == nil {
+		t.Fatal("validateGitArgs(checkout invalid) = nil, want error")
 	}
 }
 

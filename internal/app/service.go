@@ -69,7 +69,7 @@ func (s *Service) HelpText() string {
 		s.cfg.CommandPrefix + "agent clear",
 		s.cfg.CommandPrefix + "cmd list",
 		s.cfg.CommandPrefix + "cmd run <name>",
-		s.cfg.CommandPrefix + "git status|diff|log|branch|show|fetch|pull",
+		s.cfg.CommandPrefix + "git status|diff|log|branch|show|fetch|pull|add|commit|checkout",
 		s.cfg.CommandPrefix + "session status",
 		s.cfg.CommandPrefix + "session restart",
 		s.cfg.CommandPrefix + "session close",
@@ -445,6 +445,47 @@ func validateGitArgs(args []string) ([]string, error) {
 		return out, nil
 	case "branch":
 		return []string{"branch", "--all", "--verbose"}, nil
+	case "add":
+		if len(args) == 1 {
+			return []string{"add", "-A"}, nil
+		}
+		out := []string{"add", "--"}
+		for _, path := range args[1:] {
+			if err := validateGitPathArg(path); err != nil {
+				return nil, err
+			}
+			out = append(out, path)
+		}
+		return out, nil
+	case "commit":
+		if len(args) < 2 {
+			return nil, fmt.Errorf("git commit requires a message")
+		}
+		message := strings.TrimSpace(strings.Join(args[1:], " "))
+		if message == "" {
+			return nil, fmt.Errorf("git commit requires a non-empty message")
+		}
+		if strings.Contains(message, "\n") || strings.Contains(message, "\r") {
+			return nil, fmt.Errorf("git commit message must be a single line")
+		}
+		return []string{"commit", "-m", message}, nil
+	case "checkout":
+		if len(args) < 2 {
+			return nil, fmt.Errorf("git checkout requires a branch name")
+		}
+		if args[1] == "-b" {
+			if len(args) < 3 {
+				return nil, fmt.Errorf("git checkout -b requires a branch name")
+			}
+			if err := validateGitBranchName(args[2]); err != nil {
+				return nil, err
+			}
+			return []string{"checkout", "-b", args[2]}, nil
+		}
+		if err := validateGitBranchName(args[1]); err != nil {
+			return nil, err
+		}
+		return []string{"checkout", args[1]}, nil
 	case "show":
 		if len(args) < 2 {
 			return nil, fmt.Errorf("git show requires a revision")
@@ -457,6 +498,46 @@ func validateGitArgs(args []string) ([]string, error) {
 	default:
 		return nil, fmt.Errorf("unsupported git subcommand: %s", args[0])
 	}
+}
+
+func validateGitPathArg(path string) error {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return fmt.Errorf("git add path cannot be empty")
+	}
+	if strings.HasPrefix(path, "-") {
+		return fmt.Errorf("git add path cannot start with '-'")
+	}
+	if strings.Contains(path, "\x00") {
+		return fmt.Errorf("git add path contains invalid null byte")
+	}
+	return nil
+}
+
+func validateGitBranchName(name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return fmt.Errorf("git branch name cannot be empty")
+	}
+	if strings.HasPrefix(name, "-") {
+		return fmt.Errorf("git branch name cannot start with '-'")
+	}
+	if strings.Contains(name, " ") || strings.Contains(name, "\t") {
+		return fmt.Errorf("git branch name cannot contain spaces")
+	}
+	invalidFragments := []string{"..", "@{", "\\", "^", ":", "~", "?", "*", "[", "\x00"}
+	for _, fragment := range invalidFragments {
+		if strings.Contains(name, fragment) {
+			return fmt.Errorf("git branch name contains invalid sequence: %s", fragment)
+		}
+	}
+	if strings.HasSuffix(name, ".") || strings.HasSuffix(name, "/") || strings.HasSuffix(name, ".lock") {
+		return fmt.Errorf("git branch name has invalid suffix")
+	}
+	if strings.HasPrefix(name, "/") || strings.HasPrefix(name, ".") || strings.HasPrefix(name, "refs/") {
+		return fmt.Errorf("git branch name has invalid prefix")
+	}
+	return nil
 }
 
 func (s *Service) AgentListText() string {
