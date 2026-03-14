@@ -80,8 +80,10 @@ func TestBuildCodexResumeArgsKeepsExistingResumeShape(t *testing.T) {
 func TestParseGeminiStreamJSON(t *testing.T) {
 	stdout := strings.Join([]string{
 		`{"type":"init","session_id":"test-session-id"}`,
-		`{"type":"content","value":"First line"}`,
-		`{"type":"content","value":{"text":"Second line"}}`,
+		`{"type":"message","role":"user","content":"讀一下這個 project"}`,
+		`{"type":"message","role":"assistant","content":"First line"}`,
+		`{"type":"content","value":"Second line"}`,
+		`{"type":"message","role":"assistant","content":"Third line"}`,
 		`{"type":"result","value":{"usageMetadata":{"totalTokenCount":42}}}`,
 	}, "\n")
 
@@ -92,14 +94,21 @@ func TestParseGeminiStreamJSON(t *testing.T) {
 	if sessionID != "test-session-id" {
 		t.Fatalf("parseGeminiStreamJSON() sessionID = %q, want %q", sessionID, "test-session-id")
 	}
-	if output != "First line\nSecond line" {
+	if output != "First line\nSecond line\nThird line" {
 		t.Fatalf("parseGeminiStreamJSON() output = %q", output)
 	}
 }
 
 func TestParseGeminiStreamChunk(t *testing.T) {
-	got := parseGeminiStreamChunk(`{"type":"content","value":{"text":"hello"}}`)
+	got := parseGeminiStreamChunk(`{"type":"message","role":"assistant","content":"hello"}`)
 	if got != "hello" {
 		t.Fatalf("parseGeminiStreamChunk() = %q, want %q", got, "hello")
+	}
+}
+
+func TestParseGeminiStreamChunkIgnoresUserMessage(t *testing.T) {
+	got := parseGeminiStreamChunk(`{"type":"message","role":"user","content":"hello"}`)
+	if got != "" {
+		t.Fatalf("parseGeminiStreamChunk() = %q, want empty", got)
 	}
 }

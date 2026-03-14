@@ -806,6 +806,9 @@ func parseGeminiStreamJSON(stdoutText string) (string, string, bool) {
 		eventType := strings.ToLower(findStringValue(payload, "type"))
 		switch eventType {
 		case "content", "message":
+			if !shouldCaptureGeminiEvent(payload, eventType) {
+				continue
+			}
 			if text := extractGeminiEventText(payload); text != "" {
 				parts = append(parts, text)
 			}
@@ -830,6 +833,9 @@ func parseGeminiStreamChunk(rawLine string) string {
 	eventType := strings.ToLower(findStringValue(payload, "type"))
 	switch eventType {
 	case "content", "message":
+		if !shouldCaptureGeminiEvent(payload, eventType) {
+			return ""
+		}
 		return extractGeminiEventText(payload)
 	case "error":
 		text := extractGeminiEventText(payload)
@@ -842,7 +848,18 @@ func parseGeminiStreamChunk(rawLine string) string {
 	}
 }
 
+func shouldCaptureGeminiEvent(payload map[string]any, eventType string) bool {
+	if eventType == "content" {
+		return true
+	}
+	role := strings.ToLower(strings.TrimSpace(findStringValue(payload, "role")))
+	return role == "" || role == "assistant" || role == "model"
+}
+
 func extractGeminiEventText(payload map[string]any) string {
+	if text := strings.TrimSpace(findStringValue(payload, "content", "text", "message")); text != "" {
+		return text
+	}
 	if text := strings.TrimSpace(findStringValue(payload["value"], "text", "value", "content", "message")); text != "" {
 		return text
 	}

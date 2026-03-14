@@ -125,8 +125,8 @@ func (s *Service) ValidateAgentLock(channelID, threadTS, agentOverride string) e
 func (s *Service) resolveScope(channelID, threadTS, agentOverride string) (Scope, error) {
 	channelState := s.store.GetChannel(channelID)
 	scope := Scope{
-		IsThread:    threadTS != "",
-		Quiet:       s.cfg.QuietByDefault,
+		IsThread: threadTS != "",
+		Quiet:    s.cfg.QuietByDefault,
 	}
 	if threadTS == "" {
 		scope.ProjectName = channelState.Project
@@ -708,6 +708,38 @@ func (s *Service) RunPrompt(ctx context.Context, channelID, threadTS, slackUserI
 	}
 
 	rawPrompt := prompt
+	nativeSession, nativeSessionID, err := s.prepareNativeSessionState(scope, channelID)
+	if err != nil {
+		return "", err
+	}
+	prompt = s.applyAgentContextPrompt(scope, nativeSession, rawPrompt, isDM)
+
+	req := s.buildRunRequest(scope, projectCfg, channelID, threadTS, slackUserID, prompt, isDM, nativeSessionID)
+	result, err := s.runAgentWithRetry(ctx, scope, channelID, nativeSessionID, req, onChunk)
+	if err != nil && result.Output == "" {
+		if friendly := summarizeAgentFailure(scope.AgentName, result.Output, err); friendly != "" {
+			if updateErr := s.updateAgentSummary(scope, nativeSession, rawPrompt, friendly); updateErr != nil {
+				return "", updateErr
+			}
+			return friendly, nil
+		}
+	}
+	if saveErr := s.persistNativeSession(scope, channelID, nativeSession, result); saveErr != nil {
+		return "", saveErr
+	}
+	if friendly := summarizeAgentFailure(scope.AgentName, result.Output, err); friendly != "" {
+		if updateErr := s.updateAgentSummary(scope, nativeSession, rawPrompt, friendly); updateErr != nil {
+			return "", updateErr
+		}
+		return friendly, nil
+	}
+	if updateErr := s.updateAgentSummary(scope, nativeSession, rawPrompt, result.Output); updateErr != nil {
+		return "", updateErr
+	}
+	return result.Output, err
+}
+
+func (s *Service) prepareNativeSessionState(scope Scope, channelID string) (store.NativeSessionState, string, error) {
 	nativeSession := s.store.GetSession(scope.SessionKey)
 	nativeSessionID := ""
 	if usesNativeSession(scope.AgentName) {
@@ -716,7 +748,7 @@ func (s *Service) RunPrompt(ctx context.Context, channelID, threadTS, slackUserI
 		summary := nativeSession.Summary
 		summaryUpdatedAt := nativeSession.SummaryUpdatedAt
 		if clearErr := s.store.ClearSession(scope.SessionKey); clearErr != nil {
-			return "", clearErr
+			return store.NativeSessionState{}, "", clearErr
 		}
 		nativeSession = store.NativeSessionState{
 			Agent:            scope.AgentName,
@@ -728,14 +760,17 @@ func (s *Service) RunPrompt(ctx context.Context, channelID, threadTS, slackUserI
 		}
 	}
 	if nativeSessionID == "" && scope.AgentName == "claude" {
+		var err error
 		nativeSessionID, err = newSessionUUID()
 		if err != nil {
-			return "", fmt.Errorf("generate claude session id: %w", err)
+			return store.NativeSessionState{}, "", fmt.Errorf("generate claude session id: %w", err)
 		}
 	}
-	prompt = s.applyAgentContextPrompt(scope, nativeSession, rawPrompt)
+	return nativeSession, nativeSessionID, nil
+}
 
-	req := agent.RunRequest{
+func (s *Service) buildRunRequest(scope Scope, projectCfg project.Project, channelID, threadTS, slackUserID, prompt string, isDM bool, nativeSessionID string) agent.RunRequest {
+	return agent.RunRequest{
 		AgentName:       scope.AgentName,
 		ProjectName:     scope.ProjectName,
 		ProjectPath:     projectCfg.Path,
@@ -754,11 +789,13 @@ func (s *Service) RunPrompt(ctx context.Context, channelID, threadTS, slackUserI
 			"AI_OCTO_SLACK_USER": slackUserID,
 		},
 	}
+}
 
+func (s *Service) runAgentWithRetry(ctx context.Context, scope Scope, channelID, nativeSessionID string, req agent.RunRequest, onChunk func(string)) (agent.RunResult, error) {
 	result, err := s.agents.Run(ctx, req, onChunk)
 	if shouldRetryWithFreshNativeSession(scope.AgentName, nativeSessionID, err, result.Output) {
 		if clearErr := s.store.ClearSession(scope.SessionKey); clearErr != nil {
-			return result.Output, clearErr
+			return result, clearErr
 		}
 		s.appendEvent(scope, channelID, "session.native_cleared_for_retry", map[string]any{
 			"previous_native_session_id": nativeSessionID,
@@ -766,6 +803,10 @@ func (s *Service) RunPrompt(ctx context.Context, channelID, threadTS, slackUserI
 		req.NativeSessionID = ""
 		result, err = s.agents.Run(ctx, req, onChunk)
 	}
+	return result, err
+}
+
+func (s *Service) persistNativeSession(scope Scope, channelID string, nativeSession store.NativeSessionState, result agent.RunResult) error {
 	if usesNativeSession(scope.AgentName) && result.NativeSessionID != "" && result.NativeSessionID != nativeSession.NativeID {
 		if saveErr := s.store.SetSession(scope.SessionKey, store.NativeSessionState{
 			Agent:     scope.AgentName,
@@ -775,40 +816,21 @@ func (s *Service) RunPrompt(ctx context.Context, channelID, threadTS, slackUserI
 			ThreadKey: scope.ThreadKey,
 			ChannelID: channelID,
 		}); saveErr != nil {
-			return "", saveErr
+			return saveErr
 		}
 		s.appendEvent(scope, channelID, "session.native_saved", map[string]any{
 			"native_session_id":          result.NativeSessionID,
 			"previous_native_session_id": nativeSession.NativeID,
 		})
 	}
-	if friendly := summarizeAgentFailure(scope.AgentName, result.Output, err); friendly != "" {
-		if updateErr := s.updateAgentSummary(scope, nativeSession, rawPrompt, friendly); updateErr != nil {
-			return "", updateErr
-		}
-		return friendly, nil
-	}
-	if updateErr := s.updateAgentSummary(scope, nativeSession, rawPrompt, result.Output); updateErr != nil {
-		return "", updateErr
-	}
-	return result.Output, err
+	return nil
 }
 
-func (s *Service) applyAgentContextPrompt(scope Scope, session store.NativeSessionState, prompt string) string {
+func (s *Service) applyAgentContextPrompt(scope Scope, session store.NativeSessionState, prompt string, isDM bool) string {
 	if scope.AgentName != "gemini" {
 		return prompt
 	}
-	summary := strings.TrimSpace(session.Summary)
-	if summary == "" {
-		return prompt
-	}
-	return strings.TrimSpace(strings.Join([]string{
-		"Gemini thread summary:",
-		summary,
-		"",
-		"Latest user request:",
-		strings.TrimSpace(prompt),
-	}, "\n"))
+	return joinPromptSections(s.geminiContextPromptSections(scope.AgentName, session, prompt, isDM))
 }
 
 func (s *Service) updateAgentSummary(scope Scope, existing store.NativeSessionState, prompt, output string) error {
@@ -1011,15 +1033,45 @@ func (s *Service) promptSuffixForContext(agentName string, isDM bool) string {
 	if !s.isPromptEngineeringEnabled(agentName) {
 		return ""
 	}
-	languagePrompt := promptSuffixForLanguage(s.cfg.Language)
-	basePrompt := s.promptTemplateForAgent(agentName, isDM)
-	if isDM {
-		if !s.cfg.DMReadOnly {
-			return strings.TrimSpace(strings.TrimSpace(basePrompt) + "\n" + languagePrompt)
-		}
-		return strings.TrimSpace(strings.TrimSpace(basePrompt) + "\n" + languagePrompt)
+	if agentName == "gemini" {
+		return ""
 	}
-	return strings.TrimSpace(strings.TrimSpace(basePrompt) + "\n" + languagePrompt)
+	return joinPromptSections(s.standardContextPromptSections(agentName, isDM))
+}
+
+func (s *Service) geminiContextPromptSections(agentName string, session store.NativeSessionState, prompt string, isDM bool) []string {
+	sections := s.standardContextPromptSections(agentName, isDM)
+	if summary := strings.TrimSpace(session.Summary); summary != "" {
+		sections = append(sections,
+			"Gemini thread summary:",
+			summary,
+		)
+	}
+	return append(sections,
+		"Latest user request:",
+		strings.TrimSpace(prompt),
+	)
+}
+
+func (s *Service) standardContextPromptSections(agentName string, isDM bool) []string {
+	sections := make([]string, 0, 2)
+	if languagePrompt := strings.TrimSpace(promptSuffixForLanguage(s.cfg.Language)); languagePrompt != "" {
+		sections = append(sections, languagePrompt)
+	}
+	if basePrompt := strings.TrimSpace(s.promptTemplateForAgent(agentName, isDM)); basePrompt != "" {
+		sections = append(sections, basePrompt)
+	}
+	return sections
+}
+
+func joinPromptSections(sections []string) string {
+	filtered := make([]string, 0, len(sections))
+	for _, section := range sections {
+		if trimmed := strings.TrimSpace(section); trimmed != "" {
+			filtered = append(filtered, trimmed)
+		}
+	}
+	return strings.TrimSpace(strings.Join(filtered, "\n\n"))
 }
 
 func (s *Service) promptTemplateForAgent(agentName string, isDM bool) string {

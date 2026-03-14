@@ -14,16 +14,16 @@
   "log_level": "info",
   "quiet_by_default": true,
   "dm_read_only": true,
-  "channel_write_prompt": "\nChannel/project mode is writable.\n\nRules:\n- If the user asks to create, update, rename, or delete files in the current project, perform the file changes directly in the workspace when the task is feasible.\n- Prefer making the actual project change over only drafting content in chat.\n- After changing files, summarize what changed and mention the main file paths.\n- If a requested change is risky or unclear, say what blocks it before making destructive edits.\n",
+  "channel_write_prompt": "\n目前是 channel/project 可寫模式。\n\n規則：\n- 如果使用者要求建立、更新、重新命名或刪除目前專案內的檔案，且需求明確可行，請直接在 workspace 中完成修改。\n- 優先直接做出實際變更，不要只在對話中提供草稿。\n- 變更完成後，請用繁體中文簡短摘要，並列出主要檔案路徑。\n- 若需求有風險或不夠明確，先說明阻塞點，再避免做破壞性修改。\n",
   "prompts": {
     "default": {
-      "channel_write": "\nChannel/project mode is writable.\n\nRules:\n- If the user asks to create, update, rename, or delete files in the current project, perform the file changes directly in the workspace when the task is feasible.\n- Prefer making the actual project change over only drafting content in chat.\n- After changing files, summarize what changed and mention the main file paths.\n- If a requested change is risky or unclear, say what blocks it before making destructive edits.\n",
-      "dm_read_only": "\nDM mode is read-only.\n\nRules:\n- Answer questions, explain code, review code, and suggest patches in text only.\n- Do not modify files.\n- Do not run commands that write files, change git state, install packages, or alter the system.\n- Do not propose that you already changed the project.\n- If the user asks for a change, provide analysis or a proposed diff in text instead.\n"
+      "channel_write": "\n目前是 channel/project 可寫模式。\n\n規則：\n- 如果使用者要求建立、更新、重新命名或刪除目前專案內的檔案，且需求明確可行，請直接在 workspace 中完成修改。\n- 優先直接做出實際變更，不要只在對話中提供草稿。\n- 變更完成後，請用繁體中文簡短摘要，並列出主要檔案路徑。\n- 若需求有風險或不夠明確，先說明阻塞點，再避免做破壞性修改。\n",
+      "dm_read_only": "\n目前是 DM 唯讀模式。\n\n規則：\n- 只回答問題、解釋程式碼、做 code review，或提供文字版 patch 建議。\n- 不要修改檔案。\n- 不要執行會寫檔、變更 git 狀態、安裝套件或修改系統的命令。\n- 不要聲稱你已經改動專案。\n- 若使用者要求變更，請改提供分析、計畫或文字 diff。\n"
     },
     "agents": {
       "gemini": {
-        "channel_write": "\nChannel/project mode is writable.\n\nRules:\n- Prefer directly updating the workspace instead of only drafting content in chat.\n- When the user asks for a document or code change, create or update the file whenever the task is feasible.\n- After changing files, briefly summarize what changed and list the main file paths.\n",
-        "dm_read_only": "\nDM mode is read-only.\n\nRules:\n- Stay in planning and analysis mode.\n- Do not modify files.\n- If the user asks for a change, provide a concise plan or draft in text.\n"
+        "channel_write": "\n目前是 channel/project 可寫模式。\n\n規則：\n- 優先直接更新 workspace，不要只在對話中提供草稿。\n- 當使用者要求修改文件或程式碼時，只要需求明確可行，就直接建立或更新檔案。\n- 完成後請以繁體中文簡短摘要，並列出主要檔案路徑。\n- 不要使用英文回覆，除非使用者明確要求。\n",
+        "dm_read_only": "\n目前是 DM 唯讀模式。\n\n規則：\n- 保持在規劃與分析模式。\n- 不要修改檔案。\n- 若使用者要求變更，請提供精簡的繁體中文計畫或草稿。\n"
       }
     }
   },

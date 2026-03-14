@@ -132,11 +132,11 @@ func TestPromptSuffixForContextUsesAgentSpecificPrompt(t *testing.T) {
 		DMReadOnly:   "gemini-dm",
 	}
 
-	if got := svc.promptSuffixForContext("gemini", false); got != "gemini-channel" {
-		t.Fatalf("promptSuffixForContext(gemini, false) = %q", got)
+	if got := svc.promptSuffixForContext("gemini", false); got != "" {
+		t.Fatalf("promptSuffixForContext(gemini, false) = %q, want empty", got)
 	}
-	if got := svc.promptSuffixForContext("gemini", true); got != "gemini-dm" {
-		t.Fatalf("promptSuffixForContext(gemini, true) = %q", got)
+	if got := svc.promptSuffixForContext("gemini", true); got != "" {
+		t.Fatalf("promptSuffixForContext(gemini, true) = %q, want empty", got)
 	}
 	if got := svc.promptSuffixForContext("codex", false); got != "default-channel" {
 		t.Fatalf("promptSuffixForContext(codex, false) = %q", got)
@@ -178,16 +178,43 @@ func TestBuildGeminiSummaryKeepsGoalAndFiles(t *testing.T) {
 
 func TestApplyAgentContextPromptForGeminiIncludesSummary(t *testing.T) {
 	svc := newTestService(t)
+	svc.cfg.Language = "zh-TW"
+	svc.cfg.Prompts.Agents["gemini"] = config.PromptModeConfig{ChannelWrite: "請直接修改檔案"}
 	scope := Scope{AgentName: "gemini"}
 	session := store.NativeSessionState{Summary: "Goal: 建立 CONFIG.md"}
 
-	got := svc.applyAgentContextPrompt(scope, session, "請直接寫入")
+	got := svc.applyAgentContextPrompt(scope, session, "請直接寫入", false)
 
+	if !strings.Contains(got, "請一律使用繁體中文回覆。") {
+		t.Fatalf("applyAgentContextPrompt() missing language prompt: %q", got)
+	}
+	if !strings.Contains(got, "請直接修改檔案") {
+		t.Fatalf("applyAgentContextPrompt() missing base prompt: %q", got)
+	}
 	if !strings.Contains(got, "Gemini thread summary:") {
 		t.Fatalf("applyAgentContextPrompt() missing summary header: %q", got)
 	}
-	if !strings.Contains(got, "Latest user request:\n請直接寫入") {
+	if !strings.Contains(got, "Latest user request:\n\n請直接寫入") {
 		t.Fatalf("applyAgentContextPrompt() missing latest request: %q", got)
+	}
+}
+
+func TestApplyAgentContextPromptForGeminiUsesDMTemplate(t *testing.T) {
+	svc := newTestService(t)
+	svc.cfg.Language = "zh-TW"
+	svc.cfg.Prompts.Agents["gemini"] = config.PromptModeConfig{
+		ChannelWrite: "請直接修改檔案",
+		DMReadOnly:   "請只提供分析，不要修改檔案",
+	}
+	scope := Scope{AgentName: "gemini"}
+
+	got := svc.applyAgentContextPrompt(scope, store.NativeSessionState{}, "請幫我看設定", true)
+
+	if !strings.Contains(got, "請只提供分析，不要修改檔案") {
+		t.Fatalf("applyAgentContextPrompt() missing DM prompt: %q", got)
+	}
+	if strings.Contains(got, "請直接修改檔案") {
+		t.Fatalf("applyAgentContextPrompt() unexpectedly used channel prompt: %q", got)
 	}
 }
 
