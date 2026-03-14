@@ -76,27 +76,35 @@ func Run(args []string, stdout, stderr io.Writer) int {
 			return 1
 		}
 		return 0
-	default:
+	case "serve":
 		if err := runServe(resolvedConfigPath, options.daemonStateFile); err != nil {
 			fmt.Fprintf(stderr, "error: %v\n", err)
 			return 1
 		}
 		return 0
+	default:
+		panic(fmt.Sprintf("unexpected command: %s", command))
 	}
 }
 
 func parseCLI(args []string, stderr io.Writer) (string, cliOptions, error) {
-	command := "serve"
+	if len(args) == 0 {
+		printCLIUsage(stderr)
+		return "", cliOptions{}, flag.ErrHelp
+	}
+
+	command := ""
 	flagArgs := args
-	if len(args) > 0 {
-		switch args[0] {
-		case "serve", "start", "stop", "restart":
-			command = args[0]
-			flagArgs = args[1:]
-		case "help", "-h", "--help":
-			printCLIUsage(stderr)
-			return "", cliOptions{}, flag.ErrHelp
-		}
+	switch args[0] {
+	case "serve", "start", "stop", "restart":
+		command = args[0]
+		flagArgs = args[1:]
+	case "help", "-h", "--help":
+		printCLIUsage(stderr)
+		return "", cliOptions{}, flag.ErrHelp
+	default:
+		printCLIUsage(stderr)
+		return "", cliOptions{}, fmt.Errorf("unknown command: %s", args[0])
 	}
 
 	fs := flag.NewFlagSet("ai-octo-relay", flag.ContinueOnError)
