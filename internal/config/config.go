@@ -5,26 +5,27 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/user"
 	"path/filepath"
 	"strings"
 )
 
 type Config struct {
-	CommandPrefix    string                 `json:"command_prefix"`
-	DefaultAgent     string                 `json:"default_agent"`
-	Language         string                 `json:"language"`
-	StorePath        string                 `json:"store_path"`
-	StateStore       StorageConfig          `json:"state_store"`
-	EventStore       StorageConfig          `json:"event_store"`
-	LogLevel         string                 `json:"log_level"`
-	QuietByDefault   bool                   `json:"quiet_by_default"`
-	DMReadOnly       bool                   `json:"dm_read_only"`
-	ChannelWritePrompt string               `json:"channel_write_prompt"`
-	DMReadOnlyPrompt string                 `json:"dm_read_only_prompt"`
-	Prompts          PromptConfig           `json:"prompts"`
-	Slack            SlackConfig            `json:"slack"`
-	Projects         []ProjectConfig        `json:"projects"`
-	Agents           map[string]AgentConfig `json:"agents"`
+	CommandPrefix      string                 `json:"command_prefix"`
+	DefaultAgent       string                 `json:"default_agent"`
+	Language           string                 `json:"language"`
+	StorePath          string                 `json:"store_path"`
+	StateStore         StorageConfig          `json:"state_store"`
+	EventStore         StorageConfig          `json:"event_store"`
+	LogLevel           string                 `json:"log_level"`
+	QuietByDefault     bool                   `json:"quiet_by_default"`
+	DMReadOnly         bool                   `json:"dm_read_only"`
+	ChannelWritePrompt string                 `json:"channel_write_prompt"`
+	DMReadOnlyPrompt   string                 `json:"dm_read_only_prompt"`
+	Prompts            PromptConfig           `json:"prompts"`
+	Slack              SlackConfig            `json:"slack"`
+	Projects           []ProjectConfig        `json:"projects"`
+	Agents             map[string]AgentConfig `json:"agents"`
 }
 
 type PromptConfig struct {
@@ -108,6 +109,81 @@ func Load(path string) (*Config, error) {
 	}
 
 	return &cfg, nil
+}
+
+func ResolvePath(explicitPath string) (string, error) {
+	candidates, err := CandidatePaths(explicitPath)
+	if err != nil {
+		return "", err
+	}
+	for _, candidate := range candidates {
+		if candidate == "" {
+			continue
+		}
+		info, statErr := os.Stat(candidate)
+		if statErr == nil {
+			if info.IsDir() {
+				continue
+			}
+			return candidate, nil
+		}
+		if !errors.Is(statErr, os.ErrNotExist) {
+			return "", fmt.Errorf("stat config %q: %w", candidate, statErr)
+		}
+	}
+	return "", fmt.Errorf("config file not found; tried: %s", strings.Join(candidates, ", "))
+}
+
+func CandidatePaths(explicitPath string) ([]string, error) {
+	if strings.TrimSpace(explicitPath) != "" {
+		resolved, err := ExpandPath(explicitPath)
+		if err != nil {
+			return nil, err
+		}
+		return []string{resolved}, nil
+	}
+
+	out := make([]string, 0, 3)
+	for _, candidate := range []string{
+		"./config.json",
+		"~/.config/ai-octo-relay/config.json",
+		"~/.ai-octo-relay/config.json",
+	} {
+		resolved, err := ExpandPath(candidate)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, resolved)
+	}
+	return out, nil
+}
+
+func ExpandPath(path string) (string, error) {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return "", nil
+	}
+	expanded := os.ExpandEnv(trimmed)
+	if expanded == "~" || strings.HasPrefix(expanded, "~/") {
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			currentUser, lookupErr := user.Current()
+			if lookupErr != nil {
+				return "", fmt.Errorf("resolve home dir: %w", err)
+			}
+			homeDir = currentUser.HomeDir
+		}
+		if expanded == "~" {
+			expanded = homeDir
+		} else {
+			expanded = filepath.Join(homeDir, strings.TrimPrefix(expanded, "~/"))
+		}
+	}
+	absPath, err := filepath.Abs(expanded)
+	if err != nil {
+		return "", fmt.Errorf("resolve absolute path %q: %w", expanded, err)
+	}
+	return filepath.Clean(absPath), nil
 }
 
 func applyDefaults(cfg *Config) {

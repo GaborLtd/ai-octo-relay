@@ -78,7 +78,44 @@
 4. 啟動：
 
 ```bash
-go run ./cmd/bot -config ./config.json
+go run ./cmd/ai-octo-relay serve
+```
+
+若未指定 `-c` / `-config`，CLI 會依序搜尋：
+
+1. `./config.json`
+2. `~/.config/ai-octo-relay/config.json`
+3. `~/.ai-octo-relay/config.json`
+
+背景模式可用：
+
+```bash
+ai-octo-relay start
+ai-octo-relay stop
+ai-octo-relay restart
+```
+
+若要明確指定設定檔：
+
+```bash
+ai-octo-relay restart -c ./config.json
+```
+
+若尚未安裝 binary，可用：
+
+```bash
+go build -o ./bin/ai-octo-relay ./cmd/ai-octo-relay
+```
+
+若要讓 Slack `!cmd run relay-restart` 可重啟本 bot，可在 `projects[].commands` 加入：
+
+```json
+{
+  "name": "relay-restart",
+  "description": "restart ai-octo-relay daemon",
+  "command": "/absolute/path/to/ai-octo-relay",
+  "args": ["restart", "-c", "/absolute/path/to/config.json"]
+}
 ```
 
 ## Root 欄位

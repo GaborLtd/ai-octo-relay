@@ -6,3 +6,5 @@ bin/
 .gocache/
 .gocache-test/
 .gomodcache/
+ai-octo-relay.log
+ai-octo-relay.pid

@@ -234,14 +234,81 @@ func (s *Service) StatusText(channelID, threadTS string) (string, error) {
 	if scope.IsThread {
 		scopeLabel = "thread"
 	}
+	projectSource, agentSource := s.statusSources(channelID, threadTS, scope)
+	sessionStatus := "inactive"
+	if s.HasThreadSession(channelID, threadTS) {
+		sessionStatus = "active"
+	}
 	return fmt.Sprintf(
-		"scope: %s\nproject: %s\npath: %s\nagent: %s\nagent_mode: %s",
+		"scope: %s\nproject: %s\nproject_source: %s\npath: %s\nagent: %s\nagent_source: %s\nagent_mode: %s\nquiet: %t\nsession: %s",
 		scopeLabel,
 		scope.ProjectName,
+		projectSource,
 		projectCfg.Path,
 		scope.AgentName,
+		agentSource,
 		s.agents.Mode(scope.AgentName),
+		scope.Quiet,
+		sessionStatus,
 	), nil
+}
+
+func (s *Service) statusSources(channelID, threadTS string, scope Scope) (string, string) {
+	projectSource := "channel mapping"
+	agentSource := "first configured agent"
+	channelState := s.store.GetChannel(channelID)
+
+	if threadTS == "" {
+		switch {
+		case channelState.Project != "":
+			projectSource = "channel override"
+		case hasChannelMapping(s.projects, channelID):
+			projectSource = "channel mapping"
+		default:
+			projectSource = "first configured project"
+		}
+		switch {
+		case channelState.Agent != "":
+			agentSource = "channel override"
+		case projectHasDefaultAgent(s.projects, scope.ProjectName):
+			agentSource = "project default"
+		case strings.TrimSpace(s.cfg.DefaultAgent) != "":
+			agentSource = "global default"
+		}
+		return projectSource, agentSource
+	}
+
+	threadState := s.store.GetThread(scope.ThreadKey)
+	switch {
+	case threadState.Project != "":
+		projectSource = "thread override"
+	case hasChannelMapping(s.projects, channelID):
+		projectSource = "channel mapping"
+	default:
+		projectSource = "first configured project"
+	}
+	switch {
+	case threadState.Agent != "":
+		agentSource = "thread override"
+	case projectHasDefaultAgent(s.projects, scope.ProjectName):
+		agentSource = "project default"
+	case strings.TrimSpace(s.cfg.DefaultAgent) != "":
+		agentSource = "global default"
+	}
+	return projectSource, agentSource
+}
+
+func projectHasDefaultAgent(registry *project.Registry, projectName string) bool {
+	projectCfg, ok := registry.Get(projectName)
+	if !ok {
+		return false
+	}
+	return strings.TrimSpace(projectCfg.DefaultAgent) != ""
+}
+
+func hasChannelMapping(registry *project.Registry, channelID string) bool {
+	_, ok := registry.ProjectForChannel(channelID)
+	return ok
 }
 
 func (s *Service) ProjectListText() string {

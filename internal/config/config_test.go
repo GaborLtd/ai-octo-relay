@@ -1,6 +1,8 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -71,6 +73,84 @@ func TestValidateRejectsDuplicateProjectCommandName(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), `project "project-a" has duplicate command "test"`) {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestCandidatePathsWithExplicitPath(t *testing.T) {
+	got, err := CandidatePaths("./custom.json")
+	if err != nil {
+		t.Fatalf("CandidatePaths() error = %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("len(CandidatePaths()) = %d, want 1", len(got))
+	}
+	want, err := filepath.Abs("custom.json")
+	if err != nil {
+		t.Fatalf("Abs() error = %v", err)
+	}
+	if got[0] != want {
+		t.Fatalf("CandidatePaths()[0] = %q, want %q", got[0], want)
+	}
+}
+
+func TestResolvePathFindsCurrentDirectoryConfigFirst(t *testing.T) {
+	tmpDir := t.TempDir()
+	previousWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if chdirErr := os.Chdir(previousWD); chdirErr != nil {
+			t.Fatalf("restore cwd: %v", chdirErr)
+		}
+	})
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+
+	configPath := filepath.Join(tmpDir, "config.json")
+	if err := os.WriteFile(configPath, []byte(`{}`), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	got, err := ResolvePath("")
+	if err != nil {
+		t.Fatalf("ResolvePath() error = %v", err)
+	}
+	gotInfo, err := os.Stat(got)
+	if err != nil {
+		t.Fatalf("Stat(got) error = %v", err)
+	}
+	wantInfo, err := os.Stat(configPath)
+	if err != nil {
+		t.Fatalf("Stat(configPath) error = %v", err)
+	}
+	if !os.SameFile(gotInfo, wantInfo) {
+		t.Fatalf("ResolvePath() = %q, want same file as %q", got, configPath)
+	}
+}
+
+func TestResolvePathReportsCandidatesWhenMissing(t *testing.T) {
+	tmpDir := t.TempDir()
+	previousWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if chdirErr := os.Chdir(previousWD); chdirErr != nil {
+			t.Fatalf("restore cwd: %v", chdirErr)
+		}
+	})
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+
+	_, err = ResolvePath("")
+	if err == nil {
+		t.Fatal("ResolvePath() error = nil, want missing config error")
+	}
+	if !strings.Contains(err.Error(), "config file not found; tried:") {
+		t.Fatalf("ResolvePath() error = %v", err)
 	}
 }
 

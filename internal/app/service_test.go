@@ -46,6 +46,79 @@ func TestResolveScopeKeepsChannelAgentForDM(t *testing.T) {
 	}
 }
 
+func TestHelpTextIncludesHelpAndStatusCommands(t *testing.T) {
+	svc := newTestService(t)
+
+	got := svc.HelpText()
+
+	if !strings.Contains(got, "!help") {
+		t.Fatalf("HelpText() missing !help: %q", got)
+	}
+	if !strings.Contains(got, "!status") {
+		t.Fatalf("HelpText() missing !status: %q", got)
+	}
+}
+
+func TestStatusTextIncludesResolvedSourcesAndSessionState(t *testing.T) {
+	svc := newTestService(t)
+
+	got, err := svc.StatusText("C123", "")
+	if err != nil {
+		t.Fatalf("StatusText() error = %v", err)
+	}
+
+	if !strings.Contains(got, "scope: channel") {
+		t.Fatalf("StatusText() missing scope: %q", got)
+	}
+	if !strings.Contains(got, "project_source: channel mapping") {
+		t.Fatalf("StatusText() missing project_source: %q", got)
+	}
+	if !strings.Contains(got, "agent_source: project default") {
+		t.Fatalf("StatusText() missing agent_source: %q", got)
+	}
+	if !strings.Contains(got, "quiet: true") {
+		t.Fatalf("StatusText() missing quiet: %q", got)
+	}
+	if !strings.Contains(got, "session: inactive") {
+		t.Fatalf("StatusText() missing session state: %q", got)
+	}
+}
+
+func TestStatusTextShowsThreadOverridesAndActiveSession(t *testing.T) {
+	svc := newTestService(t)
+
+	if _, err := svc.UseProject("C123", "1730000000.000100", "relay"); err != nil {
+		t.Fatalf("UseProject() error = %v", err)
+	}
+	if _, err := svc.UseAgent("C123", "1730000000.000100", "gemini"); err != nil {
+		t.Fatalf("UseAgent() error = %v", err)
+	}
+	if err := svc.MarkThreadSessionActive("C123", "1730000000.000100"); err != nil {
+		t.Fatalf("MarkThreadSessionActive() error = %v", err)
+	}
+
+	got, err := svc.StatusText("C123", "1730000000.000100")
+	if err != nil {
+		t.Fatalf("StatusText() error = %v", err)
+	}
+
+	if !strings.Contains(got, "scope: thread") {
+		t.Fatalf("StatusText() missing thread scope: %q", got)
+	}
+	if !strings.Contains(got, "project_source: thread override") {
+		t.Fatalf("StatusText() missing thread project source: %q", got)
+	}
+	if !strings.Contains(got, "agent: gemini") {
+		t.Fatalf("StatusText() missing agent: %q", got)
+	}
+	if !strings.Contains(got, "agent_source: thread override") {
+		t.Fatalf("StatusText() missing thread agent source: %q", got)
+	}
+	if !strings.Contains(got, "session: active") {
+		t.Fatalf("StatusText() missing active session: %q", got)
+	}
+}
+
 func TestSummarizeAgentFailureForGeminiCapacity(t *testing.T) {
 	message := summarizeAgentFailure("gemini", `RESOURCE_EXHAUSTED MODEL_CAPACITY_EXHAUSTED "code": 429`, context.DeadlineExceeded)
 	if !strings.Contains(message, "Gemini 目前不可用") {

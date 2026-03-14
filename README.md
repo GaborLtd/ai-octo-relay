@@ -124,10 +124,86 @@ export SLACK_BOT_TOKEN=xoxb-...
 - `jsonl`
 - `sqlite`
 
+預設會依序搜尋：
+
+- `./config.json`
+- `~/.config/ai-octo-relay/config.json`
+- `~/.ai-octo-relay/config.json`
+
+也可以用 `-c` 或 `-config` 明確指定。
+
 ## 執行
 
 ```bash
-go run ./cmd/bot -config ./config.json
+go run ./cmd/ai-octo-relay serve
+```
+
+正式 binary：
+
+```bash
+go build -o ./bin/ai-octo-relay ./cmd/ai-octo-relay
+./bin/ai-octo-relay start
+```
+
+或用 `Makefile`：
+
+```bash
+make build
+make restart
+```
+
+若設定檔不在 `./config.json`，可覆寫：
+
+```bash
+make restart CONFIG=./config.json
+```
+
+或直接安裝到 `$GOBIN` / `$GOPATH/bin`：
+
+```bash
+go install ./cmd/ai-octo-relay
+ai-octo-relay start
+```
+
+背景執行：
+
+```bash
+ai-octo-relay start
+```
+
+停止背景程序：
+
+```bash
+ai-octo-relay stop
+```
+
+重啟背景程序：
+
+```bash
+ai-octo-relay restart
+```
+
+明確指定設定檔：
+
+```bash
+ai-octo-relay restart -c ./config.json
+```
+
+相容舊用法：
+
+```bash
+go run ./cmd/bot serve
+```
+
+若要掛進 project 白名單命令，可在 `projects[].commands` 加：
+
+```json
+{
+  "name": "relay-restart",
+  "description": "restart ai-octo-relay daemon",
+  "command": "/absolute/path/to/ai-octo-relay",
+  "args": ["restart", "-c", "/absolute/path/to/config.json"]
+}
 ```
 
 ## Slack App

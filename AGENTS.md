@@ -80,7 +80,21 @@
 
 - `internal/logx/logger.go`
 
-## 7. 敏感資料
+## 7. CLI / Daemon 規則
+
+- 正式 CLI 入口是 `cmd/ai-octo-relay` 與 `internal/relaycmd`
+- `cmd/bot` 只保留相容舊用法，不要把新功能只加在 `cmd/bot`
+- `serve` / `start` / `stop` / `restart` 的語意要一致，不要讓文件、help、實作彼此漂移
+- 若調整 daemon 啟停、pid state、log path 或 config 搜尋順序，要同步檢查 `README.md`、`CONFIG.md` 與 `internal/relaycmd/cli_test.go`
+- 若新增常用開發入口，可放在 `Makefile`，但應維持為薄封裝，不要繞過正式 CLI 行為
+
+主要檔案：
+
+- `cmd/ai-octo-relay/main.go`
+- `cmd/bot/main.go`
+- `internal/relaycmd/cli.go`
+
+## 8. 敏感資料
 
 不要提交：
 
