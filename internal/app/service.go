@@ -17,6 +17,7 @@ import (
 	"github.com/match/ai-octo-relay/internal/config"
 	"github.com/match/ai-octo-relay/internal/project"
 	"github.com/match/ai-octo-relay/internal/store"
+	"github.com/match/ai-octo-relay/internal/terminal"
 )
 
 type Service struct {
@@ -25,6 +26,7 @@ type Service struct {
 	agents   *agent.Registry
 	store    store.StateStore
 	events   store.EventStore
+	termExec *terminal.Executor
 }
 
 const (
@@ -51,6 +53,7 @@ func NewService(cfg *config.Config, projects *project.Registry, agents *agent.Re
 		agents:   agents,
 		store:    stateStore,
 		events:   eventStore,
+		termExec: newTerminalExecutor(cfg),
 	}
 }
 
@@ -69,6 +72,10 @@ func (s *Service) HelpText() string {
 		s.cfg.CommandPrefix + "agent clear",
 		s.cfg.CommandPrefix + "cmd list",
 		s.cfg.CommandPrefix + "cmd run <name>",
+		s.cfg.CommandPrefix + "server start <name> [--forward]",
+		s.cfg.CommandPrefix + "server stop <id>",
+		s.cfg.CommandPrefix + "server logs <id> [--follow|--stop]",
+		s.cfg.CommandPrefix + "server list",
 		s.cfg.CommandPrefix + "git status|diff|log|branch|show|fetch|pull|add|commit|checkout",
 		s.cfg.CommandPrefix + "session status",
 		s.cfg.CommandPrefix + "session restart",
@@ -82,6 +89,33 @@ func (s *Service) HelpText() string {
 		"同一個 thread 會優先沿用各 CLI 自己的 session/resume 能力。",
 		"也可在訊息開頭指定 agent，例如：gemini: 幫我看這個錯誤。",
 	}, "\n")
+}
+
+func newTerminalExecutor(cfg *config.Config) *terminal.Executor {
+	exec := terminal.New(cfg.Terminal)
+	exec.StartJanitor()
+	return exec
+}
+
+func (s *Service) HandleTerminalEvent(ev terminal.Event, client terminal.SlackClient) (bool, error) {
+	if s.termExec == nil {
+		return false, nil
+	}
+	fields := strings.Fields(strings.TrimSpace(ev.Text))
+	if len(fields) < 2 || fields[0] != s.cfg.CommandPrefix+"server" {
+		return false, nil
+	}
+
+	scope, err := s.ResolveScope(ev.ChannelID, ev.ThreadTS)
+	if err != nil {
+		return true, err
+	}
+	projectCfg, ok := s.projects.Get(scope.ProjectName)
+	if !ok {
+		return true, fmt.Errorf("project %q not found", scope.ProjectName)
+	}
+	ev.ProjectDir = projectCfg.Path
+	return true, s.termExec.Handle(ev, client)
 }
 
 func (s *Service) ResolveScope(channelID, threadTS string) (Scope, error) {

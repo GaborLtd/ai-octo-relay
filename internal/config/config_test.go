@@ -76,6 +76,22 @@ func TestValidateRejectsDuplicateProjectCommandName(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsDuplicateTerminalServerName(t *testing.T) {
+	cfg := validConfig()
+	cfg.Terminal.Servers = []TerminalServerConfig{
+		{Name: "web", Command: "npm", Args: []string{"run", "dev"}},
+		{Name: "web", Command: "go", Args: []string{"test", "./..."}},
+	}
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected validation error")
+	}
+	if !strings.Contains(err.Error(), `terminal has duplicate server "web"`) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestCandidatePathsWithExplicitPath(t *testing.T) {
 	got, err := CandidatePaths("./custom.json")
 	if err != nil {

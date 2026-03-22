@@ -57,6 +57,9 @@ func TestHelpTextIncludesHelpAndStatusCommands(t *testing.T) {
 	if !strings.Contains(got, "!status") {
 		t.Fatalf("HelpText() missing !status: %q", got)
 	}
+	if !strings.Contains(got, "!server start <name> [--forward]") {
+		t.Fatalf("HelpText() missing !server start: %q", got)
+	}
 }
 
 func TestStatusTextIncludesResolvedSourcesAndSessionState(t *testing.T) {

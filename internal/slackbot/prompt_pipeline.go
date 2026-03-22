@@ -29,6 +29,9 @@ func (b *Bot) handleCommandMessage(ctx context.Context, channelID, userID, threa
 		return b.reply(channelID, threadTS, "command error: "+err.Error())
 	}
 	b.logger.Infof("command completed: channel=%s user=%s", channelID, userID)
+	if response == "" {
+		return nil
+	}
 	return b.reply(channelID, threadTS, response)
 }
 

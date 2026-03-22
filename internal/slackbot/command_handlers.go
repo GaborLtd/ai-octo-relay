@@ -7,6 +7,14 @@ import (
 )
 
 func (b *Bot) handleCommand(ctx context.Context, channelID, userID, threadTS, text string, isDM bool) (string, error) {
+	handled, err := b.service.HandleTerminalEvent(appTerminalEvent(channelID, userID, threadTS, text, isDM), b.client)
+	if err != nil {
+		return "", err
+	}
+	if handled {
+		return "", nil
+	}
+
 	fields := strings.Fields(strings.TrimPrefix(text, b.cfg.CommandPrefix))
 	if len(fields) == 0 {
 		return b.service.HelpText(), nil

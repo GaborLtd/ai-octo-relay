@@ -24,6 +24,7 @@ type Config struct {
 	DMReadOnlyPrompt   string                 `json:"dm_read_only_prompt"`
 	Prompts            PromptConfig           `json:"prompts"`
 	Slack              SlackConfig            `json:"slack"`
+	Terminal           TerminalConfig         `json:"terminal"`
 	Projects           []ProjectConfig        `json:"projects"`
 	Agents             map[string]AgentConfig `json:"agents"`
 }
@@ -47,6 +48,25 @@ type SlackConfig struct {
 	AppToken        string   `json:"app_token"`
 	BotToken        string   `json:"bot_token"`
 	AllowedChannels []string `json:"allowed_channels"`
+}
+
+type TerminalConfig struct {
+	CloudflaredCommand string                 `json:"cloudflared_command"`
+	FollowIntervalSec  int                    `json:"follow_interval_sec"`
+	CleanupAfterSec    int                    `json:"cleanup_after_sec"`
+	Servers            []TerminalServerConfig `json:"servers"`
+}
+
+type TerminalServerConfig struct {
+	Name         string            `json:"name"`
+	Description  string            `json:"description"`
+	Command      string            `json:"command"`
+	Args         []string          `json:"args"`
+	Env          map[string]string `json:"env"`
+	Port         int               `json:"port"`
+	ReadyPattern string            `json:"ready_pattern"`
+	Oneshot      bool              `json:"oneshot"`
+	TimeoutSec   int               `json:"timeout_sec"`
 }
 
 type ProjectConfig struct {
@@ -226,6 +246,20 @@ func applyDefaults(cfg *Config) {
 	if cfg.Prompts.Agents == nil {
 		cfg.Prompts.Agents = map[string]PromptModeConfig{}
 	}
+	if strings.TrimSpace(cfg.Terminal.CloudflaredCommand) == "" {
+		cfg.Terminal.CloudflaredCommand = "cloudflared"
+	}
+	if cfg.Terminal.FollowIntervalSec <= 0 {
+		cfg.Terminal.FollowIntervalSec = 2
+	}
+	if cfg.Terminal.CleanupAfterSec <= 0 {
+		cfg.Terminal.CleanupAfterSec = 3600
+	}
+	for idx := range cfg.Terminal.Servers {
+		if cfg.Terminal.Servers[idx].Env == nil {
+			cfg.Terminal.Servers[idx].Env = map[string]string{}
+		}
+	}
 	for name, agent := range cfg.Agents {
 		if agent.PromptEngineering == nil {
 			enabled := true
@@ -390,6 +424,26 @@ func (c *Config) Validate() error {
 			if strings.TrimSpace(command.Command) == "" {
 				return fmt.Errorf("project %q command %q requires command", p.Name, commandName)
 			}
+		}
+	}
+	seenServers := make(map[string]struct{})
+	for _, server := range c.Terminal.Servers {
+		name := strings.TrimSpace(server.Name)
+		if name == "" {
+			return errors.New("terminal server name is required")
+		}
+		if _, ok := seenServers[name]; ok {
+			return fmt.Errorf("terminal has duplicate server %q", name)
+		}
+		seenServers[name] = struct{}{}
+		if strings.TrimSpace(server.Command) == "" {
+			return fmt.Errorf("terminal server %q requires command", name)
+		}
+		if server.Port < 0 || server.Port > 65535 {
+			return fmt.Errorf("terminal server %q port must be 0-65535", name)
+		}
+		if server.TimeoutSec < 0 {
+			return fmt.Errorf("terminal server %q timeout_sec must be >= 0", name)
 		}
 	}
 	for name, agent := range c.Agents {
